@@ -4,13 +4,16 @@ export interface MetricSample {
   id: number | null;
   device_id: string;
   ts: number;
-  cpu_usage: number;
-  memory_used: number;
-  memory_total: number;
-  disk_used: number;
-  disk_total: number;
-  network_rx: number;
-  network_tx: number;
+  cpu_usage: number | null;
+  memory_used: number | null;
+  memory_total: number | null;
+  disk_used: number | null;
+  disk_total: number | null;
+  network_rx: number | null;
+  network_tx: number | null;
+  gpu_usage: number | null;
+  gpu_memory_total: number | null;
+  gpu_name: string | null;
 }
 
 export interface DeviceInfo {
@@ -25,6 +28,12 @@ export interface HistoryQuery {
   device_id?: string;
   start_ts: number;
   end_ts: number;
+}
+
+export interface LocalDataStats {
+  database_path: string;
+  database_size_bytes: number;
+  sample_count: number;
 }
 
 export type { AppSettings };

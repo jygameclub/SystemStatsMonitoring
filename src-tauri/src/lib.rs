@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use metrics::MetricCollector;
-use models::{DeviceInfo, HistoryQuery, MetricSample};
+use models::{DeviceInfo, HistoryQuery, LocalDataStats, MetricSample};
 use settings::AppSettings;
 use store::Store;
 use tauri::menu::{Menu, MenuItem};
@@ -101,6 +101,30 @@ fn update_settings(
         .map_err(|error| format!("保存设置失败: {error}"))
 }
 
+#[tauri::command]
+fn get_local_data_stats(state: State<'_, AppState>) -> CommandResult<LocalDataStats> {
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "数据库锁定失败".to_string())?;
+
+    store
+        .local_data_stats()
+        .map_err(|error| format!("读取本地数据统计失败: {error}"))
+}
+
+#[tauri::command]
+fn clear_local_metric_samples(state: State<'_, AppState>) -> CommandResult<usize> {
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "数据库锁定失败".to_string())?;
+
+    store
+        .clear_metric_samples()
+        .map_err(|error| format!("清理本地历史数据失败: {error}"))
+}
+
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -178,7 +202,9 @@ pub fn run() {
             save_metric_sample,
             get_metric_history,
             get_settings,
-            update_settings
+            update_settings,
+            get_local_data_stats,
+            clear_local_metric_samples
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
@@ -190,18 +216,21 @@ mod tests {
     use crate::settings::AppSettings;
     use crate::store::Store;
 
-    fn sample(ts: i64, cpu_usage: f64) -> MetricSample {
+    fn sample(ts: i64, cpu_usage: Option<f64>) -> MetricSample {
         MetricSample {
             id: None,
             device_id: "test-device".to_string(),
             ts,
             cpu_usage,
-            memory_used: 4_000,
-            memory_total: 8_000,
-            disk_used: 100_000,
-            disk_total: 200_000,
-            network_rx: 120.0,
-            network_tx: 80.0,
+            memory_used: Some(4_000),
+            memory_total: Some(8_000),
+            disk_used: Some(100_000),
+            disk_total: Some(200_000),
+            network_rx: Some(120.0),
+            network_tx: Some(80.0),
+            gpu_usage: Some(48.0),
+            gpu_memory_total: Some(16_000),
+            gpu_name: Some("Apple M4 Pro".to_string()),
         }
     }
 
@@ -210,6 +239,8 @@ mod tests {
         assert!(AppSettings {
             sample_interval_sec: 1,
             local_save_interval_sec: 5,
+            language: "zh-CN".to_string(),
+            metrics: Default::default(),
         }
         .validate()
         .is_ok());
@@ -217,6 +248,8 @@ mod tests {
         assert!(AppSettings {
             sample_interval_sec: 0,
             local_save_interval_sec: 5,
+            language: "zh-CN".to_string(),
+            metrics: Default::default(),
         }
         .validate()
         .is_err());
@@ -224,9 +257,25 @@ mod tests {
         assert!(AppSettings {
             sample_interval_sec: 10,
             local_save_interval_sec: 5,
+            language: "zh-CN".to_string(),
+            metrics: Default::default(),
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn defaults_to_simplified_chinese_and_enabled_metrics() {
+        let settings = AppSettings::default();
+
+        assert_eq!(settings.language, "zh-CN");
+        assert!(settings.metrics.cpu);
+        assert!(settings.metrics.memory);
+        assert!(settings.metrics.disk);
+        assert!(settings.metrics.network);
+        assert!(settings.metrics.gpu);
+        assert!(settings.metrics.temperature);
+        assert!(settings.metrics.battery);
     }
 
     #[test]
@@ -235,10 +284,10 @@ mod tests {
         store.init().expect("initialize schema");
 
         store
-            .save_metric_sample(&sample(1_000, 10.0))
+            .save_metric_sample(&sample(1_000, Some(10.0)))
             .expect("save first sample");
         store
-            .save_metric_sample(&sample(2_000, 20.0))
+            .save_metric_sample(&sample(2_000, Some(20.0)))
             .expect("save second sample");
 
         let history = store
@@ -247,7 +296,27 @@ mod tests {
 
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].ts, 2_000);
-        assert_eq!(history[0].cpu_usage, 20.0);
+        assert_eq!(history[0].cpu_usage, Some(20.0));
+    }
+
+    #[test]
+    fn stores_nullable_disabled_metric_fields() {
+        let store = Store::in_memory().expect("create in-memory store");
+        store.init().expect("initialize schema");
+
+        store
+            .save_metric_sample(&sample(1_000, None))
+            .expect("save sample with disabled cpu");
+
+        let history = store
+            .metric_history("test-device", 0, 2_000)
+            .expect("query metric history");
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].cpu_usage, None);
+        assert_eq!(history[0].gpu_usage, Some(48.0));
+        assert_eq!(history[0].gpu_memory_total, Some(16_000));
+        assert_eq!(history[0].gpu_name.as_deref(), Some("Apple M4 Pro"));
     }
 
     #[test]
@@ -256,10 +325,10 @@ mod tests {
         store.init().expect("initialize schema");
 
         store
-            .save_metric_sample(&sample(1_000, 10.0))
+            .save_metric_sample(&sample(1_000, Some(10.0)))
             .expect("save old sample");
         store
-            .save_metric_sample(&sample(2_000, 20.0))
+            .save_metric_sample(&sample(2_000, Some(20.0)))
             .expect("save fresh sample");
 
         let deleted = store
@@ -272,5 +341,25 @@ mod tests {
         assert_eq!(deleted, 1);
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].ts, 2_000);
+    }
+
+    #[test]
+    fn reports_and_clears_local_metric_data() {
+        let store = Store::in_memory().expect("create in-memory store");
+        store.init().expect("initialize schema");
+        store
+            .save_metric_sample(&sample(1_000, Some(10.0)))
+            .expect("save sample");
+
+        let before = store.local_data_stats().expect("read local data stats");
+        assert_eq!(before.sample_count, 1);
+
+        let deleted = store.clear_metric_samples().expect("clear metric samples");
+        let after = store
+            .local_data_stats()
+            .expect("read local data stats again");
+
+        assert_eq!(deleted, 1);
+        assert_eq!(after.sample_count, 0);
     }
 }

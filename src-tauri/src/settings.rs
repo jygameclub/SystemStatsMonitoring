@@ -1,10 +1,35 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetricSettings {
+    pub cpu: bool,
+    pub memory: bool,
+    pub disk: bool,
+    pub network: bool,
+    pub temperature: bool,
+    pub battery: bool,
+}
+
+impl Default for MetricSettings {
+    fn default() -> Self {
+        Self {
+            cpu: true,
+            memory: true,
+            disk: true,
+            network: true,
+            temperature: true,
+            battery: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     pub sample_interval_sec: u64,
     pub local_save_interval_sec: u64,
+    pub language: String,
+    pub metrics: MetricSettings,
 }
 
 impl Default for AppSettings {
@@ -12,6 +37,8 @@ impl Default for AppSettings {
         Self {
             sample_interval_sec: 1,
             local_save_interval_sec: 5,
+            language: "zh-CN".to_string(),
+            metrics: MetricSettings::default(),
         }
     }
 }
@@ -24,6 +51,8 @@ pub enum SettingsError {
     InvalidSaveInterval,
     #[error("保存间隔不能小于采样间隔")]
     SaveIntervalShorterThanSampleInterval,
+    #[error("不支持的语言")]
+    UnsupportedLanguage,
 }
 
 impl AppSettings {
@@ -38,6 +67,10 @@ impl AppSettings {
 
         if self.local_save_interval_sec < self.sample_interval_sec {
             return Err(SettingsError::SaveIntervalShorterThanSampleInterval);
+        }
+
+        if self.language != "zh-CN" && self.language != "en" {
+            return Err(SettingsError::UnsupportedLanguage);
         }
 
         Ok(())

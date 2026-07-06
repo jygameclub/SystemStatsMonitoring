@@ -1,13 +1,14 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::models::MetricSample;
-use crate::settings::AppSettings;
+use crate::models::{LocalDataStats, MetricSample};
+use crate::settings::{AppSettings, MetricSettings};
 
 pub struct Store {
     conn: Connection,
+    db_path: Option<PathBuf>,
 }
 
 impl Store {
@@ -20,12 +21,16 @@ impl Store {
         let conn = Connection::open(path)
             .with_context(|| format!("open SQLite database {}", path.display()))?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            db_path: Some(path.to_path_buf()),
+        })
     }
 
     pub fn in_memory() -> Result<Self> {
         Ok(Self {
             conn: Connection::open_in_memory().context("open in-memory SQLite database")?,
+            db_path: None,
         })
     }
 
@@ -46,13 +51,13 @@ impl Store {
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               device_id TEXT NOT NULL,
               ts INTEGER NOT NULL,
-              cpu_usage REAL NOT NULL,
-              memory_used INTEGER NOT NULL,
-              memory_total INTEGER NOT NULL,
-              disk_used INTEGER NOT NULL,
-              disk_total INTEGER NOT NULL,
-              network_rx REAL NOT NULL,
-              network_tx REAL NOT NULL
+              cpu_usage REAL,
+              memory_used INTEGER,
+              memory_total INTEGER,
+              disk_used INTEGER,
+              disk_total INTEGER,
+              network_rx REAL,
+              network_tx REAL
             );
 
             CREATE INDEX IF NOT EXISTS idx_metric_samples_device_ts
@@ -64,6 +69,8 @@ impl Store {
             );
             "#,
         )?;
+
+        self.migrate_metric_samples_nullable()?;
 
         Ok(())
     }
@@ -87,10 +94,10 @@ impl Store {
                 sample.device_id,
                 sample.ts,
                 sample.cpu_usage,
-                sample.memory_used as i64,
-                sample.memory_total as i64,
-                sample.disk_used as i64,
-                sample.disk_total as i64,
+                sample.memory_used.map(|value| value as i64),
+                sample.memory_total.map(|value| value as i64),
+                sample.disk_used.map(|value| value as i64),
+                sample.disk_total.map(|value| value as i64),
                 sample.network_rx,
                 sample.network_tx
             ],
@@ -132,10 +139,10 @@ impl Store {
                 device_id: row.get(1)?,
                 ts: row.get(2)?,
                 cpu_usage: row.get(3)?,
-                memory_used: row.get::<_, i64>(4)? as u64,
-                memory_total: row.get::<_, i64>(5)? as u64,
-                disk_used: row.get::<_, i64>(6)? as u64,
-                disk_total: row.get::<_, i64>(7)? as u64,
+                memory_used: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+                memory_total: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+                disk_used: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
+                disk_total: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
                 network_rx: row.get(8)?,
                 network_tx: row.get(9)?,
             })
@@ -154,6 +161,44 @@ impl Store {
             .context("delete old metric samples")
     }
 
+    pub fn clear_metric_samples(&self) -> Result<usize> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM metric_samples", [])
+            .context("delete all metric samples")?;
+
+        if self.db_path.is_some() {
+            self.conn.execute_batch("VACUUM")?;
+        }
+
+        Ok(deleted)
+    }
+
+    pub fn local_data_stats(&self) -> Result<LocalDataStats> {
+        let sample_count: u64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM metric_samples", [], |row| {
+                    let count: i64 = row.get(0)?;
+                    Ok(count as u64)
+                })?;
+
+        let (database_path, database_size_bytes) = match &self.db_path {
+            Some(path) => {
+                let size = std::fs::metadata(path)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                (path.display().to_string(), size)
+            }
+            None => ("In-memory SQLite".to_string(), 0),
+        };
+
+        Ok(LocalDataStats {
+            database_path,
+            database_size_bytes,
+            sample_count,
+        })
+    }
+
     pub fn get_settings(&self) -> Result<AppSettings> {
         let sample_interval_sec = self
             .get_setting_u64("sample_interval_sec")?
@@ -161,10 +206,36 @@ impl Store {
         let local_save_interval_sec = self
             .get_setting_u64("local_save_interval_sec")?
             .unwrap_or(AppSettings::default().local_save_interval_sec);
+        let language = self
+            .get_setting_string("language")?
+            .unwrap_or(AppSettings::default().language);
+        let default_metrics = MetricSettings::default();
+        let metrics = MetricSettings {
+            cpu: self
+                .get_setting_bool("metric_cpu")?
+                .unwrap_or(default_metrics.cpu),
+            memory: self
+                .get_setting_bool("metric_memory")?
+                .unwrap_or(default_metrics.memory),
+            disk: self
+                .get_setting_bool("metric_disk")?
+                .unwrap_or(default_metrics.disk),
+            network: self
+                .get_setting_bool("metric_network")?
+                .unwrap_or(default_metrics.network),
+            temperature: self
+                .get_setting_bool("metric_temperature")?
+                .unwrap_or(default_metrics.temperature),
+            battery: self
+                .get_setting_bool("metric_battery")?
+                .unwrap_or(default_metrics.battery),
+        };
 
         let settings = AppSettings {
             sample_interval_sec,
             local_save_interval_sec,
+            language,
+            metrics,
         };
         settings.validate()?;
 
@@ -181,8 +252,18 @@ impl Store {
             "local_save_interval_sec",
             &settings.local_save_interval_sec.to_string(),
         )?;
+        self.set_setting("language", &settings.language)?;
+        self.set_setting("metric_cpu", bool_to_setting(settings.metrics.cpu))?;
+        self.set_setting("metric_memory", bool_to_setting(settings.metrics.memory))?;
+        self.set_setting("metric_disk", bool_to_setting(settings.metrics.disk))?;
+        self.set_setting("metric_network", bool_to_setting(settings.metrics.network))?;
+        self.set_setting(
+            "metric_temperature",
+            bool_to_setting(settings.metrics.temperature),
+        )?;
+        self.set_setting("metric_battery", bool_to_setting(settings.metrics.battery))?;
 
-        Ok(*settings)
+        Ok(settings.clone())
     }
 
     fn get_setting_u64(&self, key: &str) -> Result<Option<u64>> {
@@ -204,6 +285,28 @@ impl Store {
         }
     }
 
+    fn get_setting_string(&self, key: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("read string setting")
+    }
+
+    fn get_setting_bool(&self, key: &str) -> Result<Option<bool>> {
+        let value = self.get_setting_string(key)?;
+
+        match value.as_deref() {
+            Some("true") => Ok(Some(true)),
+            Some("false") => Ok(Some(false)),
+            Some(other) => bail!("setting {key} must be true or false, got {other}"),
+            None => Ok(None),
+        }
+    }
+
     fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         if key.trim().is_empty() {
             bail!("setting key cannot be empty");
@@ -219,5 +322,99 @@ impl Store {
         )?;
 
         Ok(())
+    }
+
+    fn migrate_metric_samples_nullable(&self) -> Result<()> {
+        if !self.metric_samples_need_nullable_migration()? {
+            return Ok(());
+        }
+
+        self.conn.execute_batch(
+            r#"
+            DROP INDEX IF EXISTS idx_metric_samples_device_ts;
+            ALTER TABLE metric_samples RENAME TO metric_samples_old;
+
+            CREATE TABLE metric_samples (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              device_id TEXT NOT NULL,
+              ts INTEGER NOT NULL,
+              cpu_usage REAL,
+              memory_used INTEGER,
+              memory_total INTEGER,
+              disk_used INTEGER,
+              disk_total INTEGER,
+              network_rx REAL,
+              network_tx REAL
+            );
+
+            INSERT INTO metric_samples (
+              id,
+              device_id,
+              ts,
+              cpu_usage,
+              memory_used,
+              memory_total,
+              disk_used,
+              disk_total,
+              network_rx,
+              network_tx
+            )
+            SELECT
+              id,
+              device_id,
+              ts,
+              cpu_usage,
+              memory_used,
+              memory_total,
+              disk_used,
+              disk_total,
+              network_rx,
+              network_tx
+            FROM metric_samples_old;
+
+            DROP TABLE metric_samples_old;
+
+            CREATE INDEX IF NOT EXISTS idx_metric_samples_device_ts
+            ON metric_samples(device_id, ts);
+            "#,
+        )?;
+
+        Ok(())
+    }
+
+    fn metric_samples_need_nullable_migration(&self) -> Result<bool> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(metric_samples)")?;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            let not_null: i64 = row.get(3)?;
+            Ok((name, not_null))
+        })?;
+
+        for row in rows {
+            let (name, not_null) = row?;
+            if matches!(
+                name.as_str(),
+                "cpu_usage"
+                    | "memory_used"
+                    | "memory_total"
+                    | "disk_used"
+                    | "disk_total"
+                    | "network_rx"
+                    | "network_tx"
+            ) && not_null != 0
+            {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+}
+
+fn bool_to_setting(value: bool) -> &'static str {
+    if value {
+        "true"
+    } else {
+        "false"
     }
 }

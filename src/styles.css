@@ -23,7 +23,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -199,6 +200,10 @@ button {
   border-top-color: #2563eb;
 }
 
+.metric-tile.gray {
+  border-top-color: #98a2b3;
+}
+
 .metric-label {
   font-size: 13px;
   font-weight: 700;
@@ -325,10 +330,15 @@ button {
   margin-bottom: 0;
 }
 
+.settings-stack {
+  display: grid;
+  gap: 18px;
+  max-width: 760px;
+}
+
 .settings-panel {
   display: grid;
   gap: 18px;
-  max-width: 560px;
   padding: 22px;
 }
 
@@ -345,15 +355,60 @@ button {
   font-weight: 700;
 }
 
-.form-grid input {
+.form-grid input,
+.form-grid select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
+  background: #ffffff;
 }
 
 .form-message {
   margin: 0;
+}
+
+.toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.toggle-row span {
+  display: grid;
+  gap: 4px;
+}
+
+.toggle-row em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.danger-button {
+  width: fit-content;
+  border: 0;
+  border-radius: 6px;
+  background: #a33a2d;
+  color: #ffffff;
+  font-weight: 700;
+  padding: 9px 13px;
 }
 
 @media (max-width: 980px) {
@@ -375,7 +430,8 @@ button {
   .detail-band,
   .snapshot-grid,
   .chart-grid,
-  .form-grid {
+  .form-grid,
+  .toggle-grid {
     grid-template-columns: 1fr;
   }
 

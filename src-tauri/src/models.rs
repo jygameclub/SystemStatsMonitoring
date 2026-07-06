@@ -6,13 +6,20 @@ pub struct MetricSample {
     pub id: Option<i64>,
     pub device_id: String,
     pub ts: i64,
-    pub cpu_usage: f64,
-    pub memory_used: u64,
-    pub memory_total: u64,
-    pub disk_used: u64,
-    pub disk_total: u64,
-    pub network_rx: f64,
-    pub network_tx: f64,
+    pub cpu_usage: Option<f64>,
+    pub memory_used: Option<u64>,
+    pub memory_total: Option<u64>,
+    pub disk_used: Option<u64>,
+    pub disk_total: Option<u64>,
+    pub network_rx: Option<f64>,
+    pub network_tx: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalDataStats {
+    pub database_path: String,
+    pub database_size_bytes: u64,
+    pub sample_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

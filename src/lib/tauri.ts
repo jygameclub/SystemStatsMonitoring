@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "./settings";
 import { DEFAULT_SETTINGS } from "./settings";
-import type { DeviceInfo, HistoryQuery, MetricSample } from "../types";
+import type { DeviceInfo, HistoryQuery, LocalDataStats, MetricSample } from "../types";
 
 const DEMO_DEVICE: DeviceInfo = {
   id: "browser-preview",
@@ -46,6 +46,18 @@ async function demoInvoke<T>(
       const sample = createDemoSample();
       return sample as T;
     }
+    case "get_local_data_stats": {
+      return {
+        database_path: "browser localStorage preview",
+        database_size_bytes: estimateDemoStorageBytes(),
+        sample_count: historyStore.length,
+      } satisfies LocalDataStats as T;
+    }
+    case "clear_local_metric_samples": {
+      const deleted = historyStore.length;
+      historyStore.splice(0, historyStore.length);
+      return deleted as T;
+    }
     case "save_metric_sample": {
       const sample = args?.sample as MetricSample | undefined;
       if (sample) {
@@ -66,6 +78,11 @@ async function demoInvoke<T>(
     default:
       throw new Error(`Unknown demo command: ${command}`);
   }
+}
+
+function estimateDemoStorageBytes(): number {
+  const settings = localStorage.getItem("demo-settings") ?? "";
+  return settings.length + JSON.stringify(historyStore).length;
 }
 
 function readDemoSettings(): AppSettings {
@@ -89,6 +106,8 @@ function createDemoSample(): MetricSample {
   const memoryUsed = memoryTotal * (0.52 + Math.sin(phase / 2) * 0.07);
   const diskTotal = 1_000 * 1024 * 1024 * 1024;
   const diskUsed = diskTotal * 0.62;
+  const gpuMemoryTotal = 16 * 1024 * 1024 * 1024;
+  const gpuUsage = 42 + Math.sin(phase / 1.7) * 16 + Math.random() * 4;
 
   return {
     id: null,
@@ -101,6 +120,9 @@ function createDemoSample(): MetricSample {
     disk_total: diskTotal,
     network_rx: 800_000 + Math.random() * 4_000_000,
     network_tx: 120_000 + Math.random() * 800_000,
+    gpu_usage: clamp(gpuUsage, 0, 100),
+    gpu_memory_total: gpuMemoryTotal,
+    gpu_name: "Demo GPU",
   };
 }
 
