@@ -12,6 +12,8 @@ const sample: MetricSample = {
   memory_total: 8_000,
   disk_used: 100_000,
   disk_total: 200_000,
+  disk_read_bytes: 1_024,
+  disk_write_bytes: 2_048,
   network_rx: 120,
   network_tx: 80,
   gpu_usage: 48,
@@ -56,6 +58,7 @@ describe("metrics utilities", () => {
         metrics: {
           ...DEFAULT_SETTINGS.metrics,
           cpu: false,
+          disk: false,
           network: false,
           gpu: false,
           temperature: false,
@@ -65,6 +68,10 @@ describe("metrics utilities", () => {
     ).toEqual({
       ...sample,
       cpu_usage: null,
+      disk_used: null,
+      disk_total: null,
+      disk_read_bytes: null,
+      disk_write_bytes: null,
       network_rx: null,
       network_tx: null,
       gpu_usage: null,

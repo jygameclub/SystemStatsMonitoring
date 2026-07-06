@@ -57,6 +57,8 @@ impl Store {
               memory_total INTEGER,
               disk_used INTEGER,
               disk_total INTEGER,
+              disk_read_bytes REAL,
+              disk_write_bytes REAL,
               network_rx REAL,
               network_tx REAL,
               gpu_usage REAL,
@@ -94,6 +96,8 @@ impl Store {
               memory_total,
               disk_used,
               disk_total,
+              disk_read_bytes,
+              disk_write_bytes,
               network_rx,
               network_tx,
               gpu_usage,
@@ -102,7 +106,7 @@ impl Store {
               temperature_celsius,
               power_watts,
               sensors_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             "#,
             params![
                 sample.device_id,
@@ -112,6 +116,8 @@ impl Store {
                 sample.memory_total.map(|value| value as i64),
                 sample.disk_used.map(|value| value as i64),
                 sample.disk_total.map(|value| value as i64),
+                sample.disk_read_bytes,
+                sample.disk_write_bytes,
                 sample.network_rx,
                 sample.network_tx,
                 sample.gpu_usage,
@@ -163,6 +169,8 @@ impl Store {
               memory_total,
               disk_used,
               disk_total,
+              disk_read_bytes,
+              disk_write_bytes,
               network_rx,
               network_tx,
               gpu_usage,
@@ -189,15 +197,17 @@ impl Store {
                 memory_total: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
                 disk_used: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
                 disk_total: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
-                network_rx: row.get(8)?,
-                network_tx: row.get(9)?,
-                gpu_usage: row.get(10)?,
-                gpu_memory_total: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
-                gpu_name: row.get(12)?,
-                temperature_celsius: row.get(13)?,
-                power_watts: row.get(14)?,
+                disk_read_bytes: row.get(8)?,
+                disk_write_bytes: row.get(9)?,
+                network_rx: row.get(10)?,
+                network_tx: row.get(11)?,
+                gpu_usage: row.get(12)?,
+                gpu_memory_total: row.get::<_, Option<i64>>(13)?.map(|value| value as u64),
+                gpu_name: row.get(14)?,
+                temperature_celsius: row.get(15)?,
+                power_watts: row.get(16)?,
                 sensor_readings: row
-                    .get::<_, Option<String>>(15)?
+                    .get::<_, Option<String>>(17)?
                     .and_then(|raw| serde_json::from_str(&raw).ok())
                     .unwrap_or_default(),
             })
@@ -524,6 +534,8 @@ impl Store {
               memory_total INTEGER,
               disk_used INTEGER,
               disk_total INTEGER,
+              disk_read_bytes REAL,
+              disk_write_bytes REAL,
               network_rx REAL,
               network_tx REAL,
               gpu_usage REAL,
@@ -586,6 +598,8 @@ impl Store {
                     | "memory_total"
                     | "disk_used"
                     | "disk_total"
+                    | "disk_read_bytes"
+                    | "disk_write_bytes"
                     | "network_rx"
                     | "network_tx"
                     | "gpu_usage"
@@ -607,6 +621,8 @@ impl Store {
             ("gpu_usage", "REAL"),
             ("gpu_memory_total", "INTEGER"),
             ("gpu_name", "TEXT"),
+            ("disk_read_bytes", "REAL"),
+            ("disk_write_bytes", "REAL"),
             ("temperature_celsius", "REAL"),
             ("power_watts", "REAL"),
             ("sensors_json", "TEXT"),

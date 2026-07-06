@@ -33,6 +33,8 @@ export interface MetricSample {
   memory_total: number | null;
   disk_used: number | null;
   disk_total: number | null;
+  disk_read_bytes: number | null;
+  disk_write_bytes: number | null;
   network_rx: number | null;
   network_tx: number | null;
   gpu_usage: number | null;

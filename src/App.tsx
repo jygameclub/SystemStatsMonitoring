@@ -31,7 +31,6 @@ import {
   type HistoryRange,
 } from "./lib/history";
 import { t } from "./lib/i18n";
-import { filterSampleBySettings } from "./lib/metrics";
 import {
   DEFAULT_SETTINGS,
   normalizeSettings,
@@ -69,16 +68,6 @@ function App() {
   const [historyRange, setHistoryRange] = useState<HistoryRange>("1h");
   const [localData, setLocalData] = useState<LocalDataStats | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const latestRef = useRef<MetricSample | null>(null);
-  const settingsRef = useRef<AppSettings>(settings);
-
-  useEffect(() => {
-    latestRef.current = latest;
-  }, [latest]);
-
-  useEffect(() => {
-    settingsRef.current = settings;
-  }, [settings]);
 
   const refreshDeviceInfo = useCallback(async () => {
     const deviceInfo = await invokeCommand<DeviceInfo>("get_device_info");
@@ -142,22 +131,6 @@ function App() {
 
     return () => window.clearInterval(timer);
   }, [refreshLatest, settings.sample_interval_sec]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      const sample = latestRef.current;
-      if (!sample) {
-        return;
-      }
-
-      const filtered = filterSampleBySettings(sample, settingsRef.current);
-      void invokeCommand<void>("save_metric_sample", { sample: filtered }).catch(
-        (unknownError) => setError(errorMessage(unknownError)),
-      );
-    }, settings.local_save_interval_sec * 1000);
-
-    return () => window.clearInterval(timer);
-  }, [settings.local_save_interval_sec]);
 
   useEffect(() => {
     if (!settings.s3_sync.enabled) {
@@ -466,17 +439,37 @@ function Overview({
             />
           ) : null}
           {settings.metrics.disk ? (
-            <SnapshotItem
-              label={t("metrics.diskUsed", language)}
-              value={
-                latest?.disk_used !== null &&
-                latest?.disk_used !== undefined &&
-                latest?.disk_total !== null &&
-                latest?.disk_total !== undefined
-                  ? `${formatBytes(latest.disk_used)} / ${formatBytes(latest.disk_total)}`
-                  : t("common.waiting", language)
-              }
-            />
+            <>
+              <SnapshotItem
+                label={t("metrics.diskUsed", language)}
+                value={
+                  latest?.disk_used !== null &&
+                  latest?.disk_used !== undefined &&
+                  latest?.disk_total !== null &&
+                  latest?.disk_total !== undefined
+                    ? `${formatBytes(latest.disk_used)} / ${formatBytes(latest.disk_total)}`
+                    : t("common.waiting", language)
+                }
+              />
+              <SnapshotItem
+                label={t("metrics.diskRead", language)}
+                value={
+                  latest?.disk_read_bytes !== null &&
+                  latest?.disk_read_bytes !== undefined
+                    ? formatNetworkRate(latest.disk_read_bytes)
+                    : t("common.waiting", language)
+                }
+              />
+              <SnapshotItem
+                label={t("metrics.diskWrite", language)}
+                value={
+                  latest?.disk_write_bytes !== null &&
+                  latest?.disk_write_bytes !== undefined
+                    ? formatNetworkRate(latest.disk_write_bytes)
+                    : t("common.waiting", language)
+                }
+              />
+            </>
           ) : null}
           {settings.metrics.network ? (
             <>
@@ -861,6 +854,31 @@ function buildHistoryCharts(
           name: t("history.memoryBytesSeries", language),
           color: "#14b8a6",
           values: history.map((sample) => sample.memory_used),
+        },
+      ],
+    });
+  }
+
+  if (
+    settings.metrics.disk &&
+    history.some(
+      (sample) =>
+        sample.disk_read_bytes !== null || sample.disk_write_bytes !== null,
+    )
+  ) {
+    charts.push({
+      title: t("history.diskSpeed", language),
+      valueFormatter: formatNetworkRate,
+      series: [
+        {
+          name: t("metrics.diskRead", language),
+          color: "#b7791f",
+          values: history.map((sample) => sample.disk_read_bytes),
+        },
+        {
+          name: t("metrics.diskWrite", language),
+          color: "#ea580c",
+          values: history.map((sample) => sample.disk_write_bytes),
         },
       ],
     });

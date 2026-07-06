@@ -12,6 +12,8 @@ export function filterSampleBySettings(
     memory_total: settings.metrics.memory ? sample.memory_total : null,
     disk_used: settings.metrics.disk ? sample.disk_used : null,
     disk_total: settings.metrics.disk ? sample.disk_total : null,
+    disk_read_bytes: settings.metrics.disk ? sample.disk_read_bytes : null,
+    disk_write_bytes: settings.metrics.disk ? sample.disk_write_bytes : null,
     network_rx: settings.metrics.network ? sample.network_rx : null,
     network_tx: settings.metrics.network ? sample.network_tx : null,
     gpu_usage: settings.metrics.gpu ? sample.gpu_usage : null,

@@ -135,6 +135,8 @@ function createDemoSample(): MetricSample {
   const memoryUsed = memoryTotal * (0.52 + Math.sin(phase / 2) * 0.07);
   const diskTotal = 1_000 * 1024 * 1024 * 1024;
   const diskUsed = diskTotal * 0.62;
+  const diskRead = 120_000 + Math.max(0, Math.sin(phase / 1.3)) * 32_000_000;
+  const diskWrite = 80_000 + Math.max(0, Math.cos(phase / 1.6)) * 18_000_000;
   const gpuMemoryTotal = 16 * 1024 * 1024 * 1024;
   const gpuUsage = 42 + Math.sin(phase / 1.7) * 16 + Math.random() * 4;
   const temperature = 58 + Math.sin(phase / 2.2) * 8 + Math.random() * 2;
@@ -149,6 +151,8 @@ function createDemoSample(): MetricSample {
     memory_total: memoryTotal,
     disk_used: Math.round(diskUsed),
     disk_total: diskTotal,
+    disk_read_bytes: diskRead,
+    disk_write_bytes: diskWrite,
     network_rx: 800_000 + Math.random() * 4_000_000,
     network_tx: 120_000 + Math.random() * 800_000,
     gpu_usage: clamp(gpuUsage, 0, 100),

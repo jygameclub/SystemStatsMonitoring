@@ -19,6 +19,7 @@ pub struct MetricCollector {
     components: Components,
     device_id: String,
     gpu: GpuInfo,
+    last_disk_io_ts: Option<i64>,
 }
 
 impl MetricCollector {
@@ -30,6 +31,7 @@ impl MetricCollector {
             components: Components::new_with_refreshed_list(),
             device_id,
             gpu: detect_gpu_info(),
+            last_disk_io_ts: None,
         }
     }
 
@@ -38,6 +40,12 @@ impl MetricCollector {
     }
 
     pub fn sample(&mut self) -> Result<MetricSample> {
+        let sample_ts = now_ms();
+        let disk_elapsed_secs = self
+            .last_disk_io_ts
+            .replace(sample_ts)
+            .map(|previous| (sample_ts.saturating_sub(previous) as f64) / 1000.0);
+
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
         self.disks.refresh(true);
@@ -47,6 +55,7 @@ impl MetricCollector {
         let memory_used = self.system.used_memory();
         let memory_total = self.system.total_memory();
         let (disk_used, disk_total) = disk_usage(&self.disks);
+        let (disk_read_bytes, disk_write_bytes) = disk_io_rates(&self.disks, disk_elapsed_secs);
         let (network_rx, network_tx) = network_rates(&self.networks);
         let temperature_readings = component_temperature_readings(&self.components);
         let power_readings = detect_power_sensor_readings();
@@ -75,12 +84,14 @@ impl MetricCollector {
         Ok(MetricSample {
             id: None,
             device_id: self.device_id.clone(),
-            ts: now_ms(),
+            ts: sample_ts,
             cpu_usage: Some(self.system.global_cpu_usage() as f64),
             memory_used: Some(memory_used),
             memory_total: Some(memory_total),
             disk_used: Some(disk_used),
             disk_total: Some(disk_total),
+            disk_read_bytes: Some(disk_read_bytes),
+            disk_write_bytes: Some(disk_write_bytes),
             network_rx: Some(network_rx),
             network_tx: Some(network_tx),
             gpu_usage: None,
@@ -109,6 +120,25 @@ fn disk_usage(disks: &Disks) -> (u64, u64) {
             total_acc + total,
         )
     })
+}
+
+fn disk_io_rates(disks: &Disks, elapsed_secs: Option<f64>) -> (f64, f64) {
+    let elapsed_secs = match elapsed_secs {
+        Some(value) if value.is_finite() && value > 0.0 => value,
+        _ => return (0.0, 0.0),
+    };
+    let (read_bytes, written_bytes) = disks.iter().fold((0_u64, 0_u64), |acc, disk| {
+        let usage = disk.usage();
+        (
+            acc.0.saturating_add(usage.read_bytes),
+            acc.1.saturating_add(usage.written_bytes),
+        )
+    });
+
+    (
+        read_bytes as f64 / elapsed_secs,
+        written_bytes as f64 / elapsed_secs,
+    )
 }
 
 fn network_rates(networks: &Networks) -> (f64, f64) {

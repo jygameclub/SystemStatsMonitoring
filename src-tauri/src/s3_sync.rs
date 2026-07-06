@@ -294,6 +294,8 @@ mod tests {
             memory_total: None,
             disk_used: None,
             disk_total: None,
+            disk_read_bytes: None,
+            disk_write_bytes: None,
             network_rx: None,
             network_tx: None,
             gpu_usage: None,

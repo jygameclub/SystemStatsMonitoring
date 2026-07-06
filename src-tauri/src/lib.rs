@@ -6,10 +6,12 @@ pub mod store;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use metrics::MetricCollector;
-use models::{DeviceInfo, HistoryQuery, LocalDataStats, MetricSample, S3SyncReport};
+use models::{
+    DeviceInfo, HistoryQuery, LocalDataStats, MetricSample, S3SyncReport, SensorCategory,
+};
 use settings::AppSettings;
 use store::Store;
 use tauri::menu::{Menu, MenuItem};
@@ -22,6 +24,7 @@ pub struct AppState {
     store: Mutex<Store>,
     collector: Mutex<MetricCollector>,
     device: Mutex<DeviceInfo>,
+    latest: Mutex<Option<MetricSample>>,
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -37,14 +40,30 @@ fn get_device_info(state: State<'_, AppState>) -> DeviceInfo {
 
 #[tauri::command]
 fn get_latest_metrics(state: State<'_, AppState>) -> CommandResult<MetricSample> {
+    if let Some(sample) = state
+        .latest
+        .lock()
+        .map_err(|_| "最新采样锁定失败".to_string())?
+        .clone()
+    {
+        return Ok(sample);
+    }
+
     let mut collector = state
         .collector
         .lock()
         .map_err(|_| "指标采集器锁定失败".to_string())?;
 
-    collector
+    let sample = collector
         .sample()
-        .map_err(|error| format!("指标采集失败: {error}"))
+        .map_err(|error| format!("指标采集失败: {error}"))?;
+
+    *state
+        .latest
+        .lock()
+        .map_err(|_| "最新采样锁定失败".to_string())? = Some(sample.clone());
+
+    Ok(sample)
 }
 
 #[tauri::command]
@@ -68,6 +87,114 @@ fn save_metric_sample(state: State<'_, AppState>, sample: MetricSample) -> Comma
 
 fn history_retention_cutoff(ts: i64) -> i64 {
     ts - HISTORY_RETENTION_MS
+}
+
+fn start_background_sampler(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut last_sample_ts = 0_i64;
+        let mut last_save_ts = 0_i64;
+
+        loop {
+            let _ = background_sampler_tick(&app, &mut last_sample_ts, &mut last_save_ts);
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+fn background_sampler_tick(
+    app: &tauri::AppHandle,
+    last_sample_ts: &mut i64,
+    last_save_ts: &mut i64,
+) -> anyhow::Result<()> {
+    let now = now_ms();
+    let state = app.state::<AppState>();
+    let settings = {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("数据库锁定失败"))?;
+        store.get_settings()?
+    };
+    let sample_interval_ms = (settings.sample_interval_sec as i64).saturating_mul(1_000);
+    if now.saturating_sub(*last_sample_ts) < sample_interval_ms {
+        return Ok(());
+    }
+
+    let sample = {
+        let mut collector = state
+            .collector
+            .lock()
+            .map_err(|_| anyhow::anyhow!("指标采集器锁定失败"))?;
+        collector.sample()?
+    };
+    *last_sample_ts = sample.ts;
+
+    *state
+        .latest
+        .lock()
+        .map_err(|_| anyhow::anyhow!("最新采样锁定失败"))? = Some(sample.clone());
+
+    let save_interval_ms = (settings.local_save_interval_sec as i64).saturating_mul(1_000);
+    if now.saturating_sub(*last_save_ts) < save_interval_ms {
+        return Ok(());
+    }
+
+    let filtered = filter_sample_by_settings(sample, &settings);
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| anyhow::anyhow!("数据库锁定失败"))?;
+    store.save_metric_sample(&filtered)?;
+    store.prune_metric_samples_before(history_retention_cutoff(filtered.ts))?;
+    *last_save_ts = now;
+
+    Ok(())
+}
+
+fn filter_sample_by_settings(mut sample: MetricSample, settings: &AppSettings) -> MetricSample {
+    let metrics = &settings.metrics;
+
+    if !metrics.cpu {
+        sample.cpu_usage = None;
+    }
+    if !metrics.memory {
+        sample.memory_used = None;
+        sample.memory_total = None;
+    }
+    if !metrics.disk {
+        sample.disk_used = None;
+        sample.disk_total = None;
+        sample.disk_read_bytes = None;
+        sample.disk_write_bytes = None;
+    }
+    if !metrics.network {
+        sample.network_rx = None;
+        sample.network_tx = None;
+    }
+    if !metrics.gpu {
+        sample.gpu_usage = None;
+        sample.gpu_memory_total = None;
+        sample.gpu_name = None;
+    }
+    if !metrics.temperature {
+        sample.temperature_celsius = None;
+    }
+    if !metrics.power {
+        sample.power_watts = None;
+    }
+
+    sample
+        .sensor_readings
+        .retain(|reading| match reading.category {
+            SensorCategory::Temperature => metrics.temperature,
+            SensorCategory::Voltage
+            | SensorCategory::Current
+            | SensorCategory::Power
+            | SensorCategory::Energy => metrics.power,
+            SensorCategory::Fan => true,
+        });
+
+    sample
 }
 
 #[tauri::command]
@@ -324,9 +451,11 @@ pub fn run() {
                 store: Mutex::new(store),
                 collector: Mutex::new(collector),
                 device: Mutex::new(device),
+                latest: Mutex::new(None),
             });
 
             setup_tray(app)?;
+            start_background_sampler(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -363,6 +492,8 @@ mod tests {
             memory_total: Some(8_000),
             disk_used: Some(100_000),
             disk_total: Some(200_000),
+            disk_read_bytes: Some(1_024.0),
+            disk_write_bytes: Some(2_048.0),
             network_rx: Some(120.0),
             network_tx: Some(80.0),
             gpu_usage: Some(48.0),
@@ -505,6 +636,8 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].cpu_usage, None);
         assert_eq!(history[0].gpu_usage, Some(48.0));
+        assert_eq!(history[0].disk_read_bytes, Some(1_024.0));
+        assert_eq!(history[0].disk_write_bytes, Some(2_048.0));
         assert_eq!(history[0].gpu_memory_total, Some(16_000));
         assert_eq!(history[0].gpu_name.as_deref(), Some("Apple M4 Pro"));
         assert_eq!(history[0].temperature_celsius, Some(63.5));
@@ -514,6 +647,31 @@ mod tests {
             history[0].sensor_readings[0].label,
             "CPU performance core 1"
         );
+    }
+
+    #[test]
+    fn filters_disabled_metrics_before_background_save() {
+        let mut settings = AppSettings::default();
+        settings.metrics.disk = false;
+        settings.metrics.network = false;
+        settings.metrics.gpu = false;
+        settings.metrics.temperature = false;
+        settings.metrics.power = false;
+
+        let filtered = super::filter_sample_by_settings(sample(1_000, Some(10.0)), &settings);
+
+        assert_eq!(filtered.cpu_usage, Some(10.0));
+        assert_eq!(filtered.disk_used, None);
+        assert_eq!(filtered.disk_total, None);
+        assert_eq!(filtered.disk_read_bytes, None);
+        assert_eq!(filtered.disk_write_bytes, None);
+        assert_eq!(filtered.network_rx, None);
+        assert_eq!(filtered.network_tx, None);
+        assert_eq!(filtered.gpu_memory_total, None);
+        assert_eq!(filtered.gpu_name, None);
+        assert_eq!(filtered.temperature_celsius, None);
+        assert_eq!(filtered.power_watts, None);
+        assert!(filtered.sensor_readings.is_empty());
     }
 
     #[test]

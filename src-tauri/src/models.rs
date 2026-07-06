@@ -42,6 +42,8 @@ pub struct MetricSample {
     pub memory_total: Option<u64>,
     pub disk_used: Option<u64>,
     pub disk_total: Option<u64>,
+    pub disk_read_bytes: Option<f64>,
+    pub disk_write_bytes: Option<f64>,
     pub network_rx: Option<f64>,
     pub network_tx: Option<f64>,
     pub gpu_usage: Option<f64>,

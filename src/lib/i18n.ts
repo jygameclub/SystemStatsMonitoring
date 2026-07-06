@@ -33,6 +33,8 @@ type TranslationKey =
   | "metrics.battery"
   | "metrics.memoryUsed"
   | "metrics.diskUsed"
+  | "metrics.diskRead"
+  | "metrics.diskWrite"
   | "metrics.gpuName"
   | "metrics.gpuMemoryTotal"
   | "metrics.gpuUsage"
@@ -50,6 +52,7 @@ type TranslationKey =
   | "history.memoryBytes"
   | "history.memoryBytesSeries"
   | "history.diskSeries"
+  | "history.diskSpeed"
   | "history.networkSeries"
   | "history.gpuSeries"
   | "history.temperatureSeries"
@@ -116,6 +119,8 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "metrics.battery": "电池",
     "metrics.memoryUsed": "已用内存",
     "metrics.diskUsed": "已用磁盘",
+    "metrics.diskRead": "磁盘读取",
+    "metrics.diskWrite": "磁盘写入",
     "metrics.gpuName": "显卡",
     "metrics.gpuMemoryTotal": "显存",
     "metrics.gpuUsage": "GPU 使用率",
@@ -133,6 +138,7 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "history.memoryBytes": "内存用量",
     "history.memoryBytesSeries": "已用内存",
     "history.diskSeries": "磁盘 %",
+    "history.diskSpeed": "磁盘速度",
     "history.networkSeries": "网络",
     "history.gpuSeries": "GPU",
     "history.temperatureSeries": "温度",
@@ -198,6 +204,8 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "metrics.battery": "Battery",
     "metrics.memoryUsed": "Memory Used",
     "metrics.diskUsed": "Disk Used",
+    "metrics.diskRead": "Disk Read",
+    "metrics.diskWrite": "Disk Write",
     "metrics.gpuName": "GPU",
     "metrics.gpuMemoryTotal": "GPU Memory",
     "metrics.gpuUsage": "GPU Usage",
@@ -215,6 +223,7 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "history.memoryBytes": "Memory Usage",
     "history.memoryBytesSeries": "Memory Used",
     "history.diskSeries": "Disk %",
+    "history.diskSpeed": "Disk Speed",
     "history.networkSeries": "Network",
     "history.gpuSeries": "GPU",
     "history.temperatureSeries": "Temperature",
