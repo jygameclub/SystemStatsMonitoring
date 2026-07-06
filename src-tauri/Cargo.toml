@@ -1,0 +1,23 @@
+[package]
+name = "system-stats-monitoring"
+version = "0.1.0"
+description = "Local-first cross-platform system monitor"
+authors = ["SystemStatsMonitoring"]
+edition = "2021"
+
+[lib]
+name = "system_stats_monitoring_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.39"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+thiserror = "2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
