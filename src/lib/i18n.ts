@@ -15,19 +15,29 @@ type TranslationKey =
   | "nav.settings"
   | "device.loading"
   | "overview.currentSnapshot"
+  | "overview.sensorDetails"
   | "overview.waitingFirstSample"
+  | "sensors.temperature"
+  | "sensors.voltage"
+  | "sensors.current"
+  | "sensors.power"
+  | "sensors.energy"
+  | "sensors.fan"
   | "metrics.cpu"
   | "metrics.memory"
   | "metrics.disk"
   | "metrics.network"
   | "metrics.gpu"
   | "metrics.temperature"
+  | "metrics.power"
   | "metrics.battery"
   | "metrics.memoryUsed"
   | "metrics.diskUsed"
   | "metrics.gpuName"
   | "metrics.gpuMemoryTotal"
   | "metrics.gpuUsage"
+  | "metrics.temperatureCelsius"
+  | "metrics.powerWatts"
   | "metrics.download"
   | "metrics.upload"
   | "history.refresh"
@@ -41,6 +51,8 @@ type TranslationKey =
   | "history.diskSeries"
   | "history.networkSeries"
   | "history.gpuSeries"
+  | "history.temperatureSeries"
+  | "history.powerSeries"
   | "settings.sampling"
   | "settings.sampleInterval"
   | "settings.saveInterval"
@@ -70,19 +82,29 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "nav.settings": "设置",
     "device.loading": "正在加载设备信息",
     "overview.currentSnapshot": "当前快照",
+    "overview.sensorDetails": "传感器明细",
     "overview.waitingFirstSample": "等待首次采样",
+    "sensors.temperature": "温度",
+    "sensors.voltage": "电压",
+    "sensors.current": "电流",
+    "sensors.power": "功率",
+    "sensors.energy": "能耗",
+    "sensors.fan": "风扇",
     "metrics.cpu": "CPU",
     "metrics.memory": "内存",
     "metrics.disk": "磁盘",
     "metrics.network": "网络",
     "metrics.gpu": "GPU",
     "metrics.temperature": "温度",
+    "metrics.power": "功率",
     "metrics.battery": "电池",
     "metrics.memoryUsed": "已用内存",
     "metrics.diskUsed": "已用磁盘",
     "metrics.gpuName": "显卡",
     "metrics.gpuMemoryTotal": "显存",
     "metrics.gpuUsage": "GPU 使用率",
+    "metrics.temperatureCelsius": "当前温度",
+    "metrics.powerWatts": "当前功率",
     "metrics.download": "下载",
     "metrics.upload": "上传",
     "history.refresh": "刷新",
@@ -96,9 +118,11 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "history.diskSeries": "磁盘 %",
     "history.networkSeries": "网络",
     "history.gpuSeries": "GPU",
+    "history.temperatureSeries": "温度",
+    "history.powerSeries": "功率",
     "settings.sampling": "采样设置",
-    "settings.sampleInterval": "采样间隔",
-    "settings.saveInterval": "本地保存间隔",
+    "settings.sampleInterval": "采样间隔（秒）",
+    "settings.saveInterval": "本地保存间隔（秒）",
     "settings.language": "语言",
     "settings.metrics": "指标开关",
     "settings.unsupportedHint": "当前版本只保留开关，采集稍后支持。",
@@ -124,19 +148,29 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "nav.settings": "Settings",
     "device.loading": "Loading device profile",
     "overview.currentSnapshot": "Current Snapshot",
+    "overview.sensorDetails": "Sensor Details",
     "overview.waitingFirstSample": "Waiting for first sample",
+    "sensors.temperature": "Temperature",
+    "sensors.voltage": "Voltage",
+    "sensors.current": "Current",
+    "sensors.power": "Power",
+    "sensors.energy": "Energy",
+    "sensors.fan": "Fan",
     "metrics.cpu": "CPU",
     "metrics.memory": "Memory",
     "metrics.disk": "Disk",
     "metrics.network": "Network",
     "metrics.gpu": "GPU",
     "metrics.temperature": "Temperature",
+    "metrics.power": "Power",
     "metrics.battery": "Battery",
     "metrics.memoryUsed": "Memory Used",
     "metrics.diskUsed": "Disk Used",
     "metrics.gpuName": "GPU",
     "metrics.gpuMemoryTotal": "GPU Memory",
     "metrics.gpuUsage": "GPU Usage",
+    "metrics.temperatureCelsius": "Temperature",
+    "metrics.powerWatts": "Power",
     "metrics.download": "Download",
     "metrics.upload": "Upload",
     "history.refresh": "Refresh",
@@ -150,9 +184,11 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "history.diskSeries": "Disk %",
     "history.networkSeries": "Network",
     "history.gpuSeries": "GPU",
+    "history.temperatureSeries": "Temperature",
+    "history.powerSeries": "Power",
     "settings.sampling": "Sampling",
-    "settings.sampleInterval": "Sample interval",
-    "settings.saveInterval": "Local save interval",
+    "settings.sampleInterval": "Sample interval (seconds)",
+    "settings.saveInterval": "Local save interval (seconds)",
     "settings.language": "Language",
     "settings.metrics": "Metric toggles",
     "settings.unsupportedHint": "Toggle is saved now; collection will be added later.",

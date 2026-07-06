@@ -1,6 +1,37 @@
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorCategory {
+    Temperature,
+    Voltage,
+    Current,
+    Power,
+    Energy,
+    Fan,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorUnit {
+    Celsius,
+    Volt,
+    Ampere,
+    Watt,
+    WattHour,
+    Percent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SensorReading {
+    pub id: String,
+    pub label: String,
+    pub category: SensorCategory,
+    pub value: f64,
+    pub unit: SensorUnit,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MetricSample {
     pub id: Option<i64>,
@@ -13,6 +44,12 @@ pub struct MetricSample {
     pub disk_total: Option<u64>,
     pub network_rx: Option<f64>,
     pub network_tx: Option<f64>,
+    pub gpu_usage: Option<f64>,
+    pub gpu_memory_total: Option<u64>,
+    pub gpu_name: Option<String>,
+    pub temperature_celsius: Option<f64>,
+    pub power_watts: Option<f64>,
+    pub sensor_readings: Vec<SensorReading>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,7 +77,16 @@ pub struct DeviceInfo {
 
 impl DeviceInfo {
     pub fn current() -> Self {
-        let name = System::host_name().unwrap_or_else(|| "Local Machine".to_string());
+        Self::current_with_machine_name("")
+    }
+
+    pub fn current_with_machine_name(machine_name: &str) -> Self {
+        let fallback_name = System::host_name().unwrap_or_else(|| "Local Machine".to_string());
+        let name = if machine_name.trim().is_empty() {
+            fallback_name
+        } else {
+            machine_name.trim().to_string()
+        };
         let os = System::name().unwrap_or_else(|| std::env::consts::OS.to_string());
         let arch = std::env::consts::ARCH.to_string();
         let id = format!(
@@ -58,6 +104,13 @@ impl DeviceInfo {
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct S3SyncReport {
+    pub uploaded_days: usize,
+    pub downloaded_devices: usize,
+    pub imported_samples: usize,
 }
 
 fn sanitize_device_id(value: &str) -> String {

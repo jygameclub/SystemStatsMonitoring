@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   formatBytes,
   formatNetworkRate,
+  formatPower,
   formatPercent,
+  formatTemperature,
   formatTimeLabel,
 } from "./format";
 
@@ -24,6 +26,14 @@ describe("format utilities", () => {
     expect(formatNetworkRate(512)).toBe("512 B/s");
     expect(formatNetworkRate(2048)).toBe("2.0 KB/s");
     expect(formatNetworkRate(5 * 1024 * 1024)).toBe("5.0 MB/s");
+  });
+
+  it("formats temperatures", () => {
+    expect(formatTemperature(63.456)).toBe("63.5°C");
+  });
+
+  it("formats power in watts", () => {
+    expect(formatPower(18.24)).toBe("18.2 W");
   });
 
   it("formats timestamps as compact local time labels", () => {

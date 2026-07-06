@@ -1,5 +1,29 @@
 import type { AppSettings } from "./lib/settings";
 
+export type SensorCategory =
+  | "temperature"
+  | "voltage"
+  | "current"
+  | "power"
+  | "energy"
+  | "fan";
+
+export type SensorUnit =
+  | "celsius"
+  | "volt"
+  | "ampere"
+  | "watt"
+  | "watt_hour"
+  | "percent";
+
+export interface SensorReading {
+  id: string;
+  label: string;
+  category: SensorCategory;
+  value: number;
+  unit: SensorUnit;
+}
+
 export interface MetricSample {
   id: number | null;
   device_id: string;
@@ -14,6 +38,9 @@ export interface MetricSample {
   gpu_usage: number | null;
   gpu_memory_total: number | null;
   gpu_name: string | null;
+  temperature_celsius: number | null;
+  power_watts: number | null;
+  sensor_readings: SensorReading[];
 }
 
 export interface DeviceInfo {

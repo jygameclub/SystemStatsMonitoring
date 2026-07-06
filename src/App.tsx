@@ -12,14 +12,23 @@ import type {
   DeviceInfo,
   LocalDataStats,
   MetricSample,
+  SensorCategory,
+  SensorReading,
+  SensorUnit,
 } from "./types";
 import {
   formatBytes,
   formatNetworkRate,
+  formatPower,
   formatPercent,
+  formatTemperature,
   formatTimeLabel,
 } from "./lib/format";
-import { historyRangeToStartTs, type HistoryRange } from "./lib/history";
+import {
+  downsampleHistory,
+  historyRangeToStartTs,
+  type HistoryRange,
+} from "./lib/history";
 import { t } from "./lib/i18n";
 import { filterSampleBySettings } from "./lib/metrics";
 import {
@@ -143,7 +152,7 @@ function App() {
           end_ts: now,
         },
       });
-      setHistory(samples);
+      setHistory(downsampleHistory(samples));
       setError(null);
     } catch (unknownError) {
       setError(errorMessage(unknownError));
@@ -261,11 +270,12 @@ interface UsageSummary {
   cpu: number | null;
   memory: number | null;
   disk: number | null;
+  gpu: number | null;
 }
 
 function deriveUsage(sample: MetricSample | null): UsageSummary {
   if (!sample) {
-    return { cpu: null, memory: null, disk: null };
+    return { cpu: null, memory: null, disk: null, gpu: null };
   }
 
   return {
@@ -282,6 +292,7 @@ function deriveUsage(sample: MetricSample | null): UsageSummary {
       sample.disk_total > 0
         ? (sample.disk_used / sample.disk_total) * 100
         : null,
+    gpu: sample.gpu_usage,
   };
 }
 
@@ -336,11 +347,38 @@ function Overview({
             tone="blue"
           />
         ) : null}
+        {settings.metrics.gpu ? (
+          <MetricTile
+            label={t("metrics.gpu", language)}
+            value={
+              usage.gpu !== null
+                ? formatPercent(usage.gpu)
+                : latest?.gpu_name ?? t("common.waiting", language)
+            }
+            tone="purple"
+          />
+        ) : null}
         {settings.metrics.temperature ? (
           <MetricTile
             label={t("metrics.temperature", language)}
-            value={t("common.notSupported", language)}
-            tone="gray"
+            value={
+              latest?.temperature_celsius !== null &&
+              latest?.temperature_celsius !== undefined
+                ? formatTemperature(latest.temperature_celsius)
+                : t("common.notSupported", language)
+            }
+            tone="red"
+          />
+        ) : null}
+        {settings.metrics.power ? (
+          <MetricTile
+            label={t("metrics.power", language)}
+            value={
+              latest?.power_watts !== null && latest?.power_watts !== undefined
+                ? formatPower(latest.power_watts)
+                : t("common.notSupported", language)
+            }
+            tone="orange"
           />
         ) : null}
         {settings.metrics.battery ? (
@@ -408,8 +446,61 @@ function Overview({
               />
             </>
           ) : null}
+          {settings.metrics.gpu ? (
+            <>
+              <SnapshotItem
+                label={t("metrics.gpuName", language)}
+                value={latest?.gpu_name ?? t("common.waiting", language)}
+              />
+              <SnapshotItem
+                label={t("metrics.gpuMemoryTotal", language)}
+                value={
+                  latest?.gpu_memory_total !== null &&
+                  latest?.gpu_memory_total !== undefined
+                    ? formatBytes(latest.gpu_memory_total)
+                    : t("common.waiting", language)
+                }
+              />
+              <SnapshotItem
+                label={t("metrics.gpuUsage", language)}
+                value={
+                  latest?.gpu_usage !== null && latest?.gpu_usage !== undefined
+                    ? formatPercent(latest.gpu_usage)
+                    : t("common.notSupported", language)
+                }
+              />
+            </>
+          ) : null}
+          {settings.metrics.temperature ? (
+            <SnapshotItem
+              label={t("metrics.temperatureCelsius", language)}
+              value={
+                latest?.temperature_celsius !== null &&
+                latest?.temperature_celsius !== undefined
+                  ? formatTemperature(latest.temperature_celsius)
+                  : t("common.notSupported", language)
+              }
+            />
+          ) : null}
+          {settings.metrics.power ? (
+            <SnapshotItem
+              label={t("metrics.powerWatts", language)}
+              value={
+                latest?.power_watts !== null && latest?.power_watts !== undefined
+                  ? formatPower(latest.power_watts)
+                  : t("common.notSupported", language)
+              }
+            />
+          ) : null}
         </div>
       </section>
+
+      {latest && visibleSensorReadings(latest, settings).length > 0 ? (
+        <SensorDetails
+          readings={visibleSensorReadings(latest, settings)}
+          language={language}
+        />
+      ) : null}
     </div>
   );
 }
@@ -425,7 +516,15 @@ function MetricTile({
 }: {
   label: string;
   value: string;
-  tone: "green" | "teal" | "amber" | "blue" | "gray";
+  tone:
+    | "green"
+    | "teal"
+    | "amber"
+    | "blue"
+    | "purple"
+    | "red"
+    | "orange"
+    | "gray";
 }) {
   return (
     <article className={`metric-tile ${tone}`}>
@@ -442,6 +541,113 @@ function SnapshotItem({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function SensorDetails({
+  readings,
+  language,
+}: {
+  readings: SensorReading[];
+  language: SupportedLanguage;
+}) {
+  const groups = groupSensorReadings(readings);
+
+  return (
+    <section className="sensor-panel">
+      <h2>{t("overview.sensorDetails", language)}</h2>
+      <div className="sensor-groups">
+        {groups.map((group) => (
+          <div key={group.category} className="sensor-group">
+            <h3>{sensorCategoryLabel(group.category, language)}</h3>
+            <div className="sensor-list">
+              {group.readings.map((reading) => (
+                <div key={reading.id} className="sensor-row">
+                  <span>{reading.label}</span>
+                  <strong>{formatSensorValue(reading.value, reading.unit)}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function visibleSensorReadings(
+  sample: MetricSample,
+  settings: AppSettings,
+): SensorReading[] {
+  return (sample.sensor_readings ?? []).filter((reading) => {
+    if (reading.category === "temperature") {
+      return settings.metrics.temperature;
+    }
+
+    if (
+      reading.category === "power" ||
+      reading.category === "current" ||
+      reading.category === "voltage" ||
+      reading.category === "energy"
+    ) {
+      return settings.metrics.power;
+    }
+
+    return true;
+  });
+}
+
+function groupSensorReadings(readings: SensorReading[]): Array<{
+  category: SensorCategory;
+  readings: SensorReading[];
+}> {
+  const order: SensorCategory[] = [
+    "temperature",
+    "voltage",
+    "current",
+    "power",
+    "energy",
+    "fan",
+  ];
+
+  return order
+    .map((category) => ({
+      category,
+      readings: readings.filter((reading) => reading.category === category),
+    }))
+    .filter((group) => group.readings.length > 0);
+}
+
+function sensorCategoryLabel(
+  category: SensorCategory,
+  language: SupportedLanguage,
+): string {
+  const key: Record<SensorCategory, Parameters<typeof t>[0]> = {
+    temperature: "sensors.temperature",
+    voltage: "sensors.voltage",
+    current: "sensors.current",
+    power: "sensors.power",
+    energy: "sensors.energy",
+    fan: "sensors.fan",
+  };
+
+  return t(key[category], language);
+}
+
+function formatSensorValue(value: number, unit: SensorUnit): string {
+  switch (unit) {
+    case "celsius":
+      return formatTemperature(value);
+    case "volt":
+      return `${value.toFixed(3)} V`;
+    case "ampere":
+      return `${value.toFixed(2)} A`;
+    case "watt":
+      return formatPower(value);
+    case "watt_hour":
+      return `${value.toFixed(1)} Wh`;
+    case "percent":
+      return formatPercent(value);
+  }
 }
 
 function History({
@@ -465,20 +671,16 @@ function History({
     <div className="page-stack">
       <div className="toolbar">
         <div className="segmented">
-          <button
-            type="button"
-            className={range === "1h" ? "active" : ""}
-            onClick={() => onRangeChange("1h")}
-          >
-            1h
-          </button>
-          <button
-            type="button"
-            className={range === "24h" ? "active" : ""}
-            onClick={() => onRangeChange("24h")}
-          >
-            24h
-          </button>
+          {historyRangeItems(language).map((item) => (
+            <button
+              key={item.range}
+              type="button"
+              className={range === item.range ? "active" : ""}
+              onClick={() => onRangeChange(item.range)}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
         <button className="secondary-button" type="button" onClick={onRefresh}>
           {t("history.refresh", language)}
@@ -505,6 +707,18 @@ function History({
       )}
     </div>
   );
+}
+
+function historyRangeItems(language: SupportedLanguage): Array<{
+  range: HistoryRange;
+  label: string;
+}> {
+  return [
+    { range: "1h", label: "1h" },
+    { range: "24h", label: "24h" },
+    { range: "week", label: "week" },
+    { range: "month", label: language === "zh-CN" ? "月" : "month" },
+  ];
 }
 
 interface HistoryChart {
@@ -567,6 +781,20 @@ function buildHistoryCharts(
     });
   }
 
+  if (settings.metrics.memory) {
+    charts.push({
+      title: t("history.memoryBytes", language),
+      valueFormatter: formatBytes,
+      series: [
+        {
+          name: t("history.memoryBytesSeries", language),
+          color: "#14b8a6",
+          values: history.map((sample) => sample.memory_used),
+        },
+      ],
+    });
+  }
+
   if (settings.metrics.network) {
     charts.push({
       title: t("history.networkSeries", language),
@@ -581,6 +809,53 @@ function buildHistoryCharts(
           name: t("metrics.upload", language),
           color: "#7c3aed",
           values: history.map((sample) => sample.network_tx),
+        },
+      ],
+    });
+  }
+
+  if (
+    settings.metrics.gpu &&
+    history.some((sample) => sample.gpu_usage !== null)
+  ) {
+    charts.push({
+      title: t("history.gpuSeries", language),
+      series: [
+        {
+          name: t("metrics.gpuUsage", language),
+          color: "#9333ea",
+          values: history.map((sample) => sample.gpu_usage),
+        },
+      ],
+    });
+  }
+
+  if (
+    settings.metrics.temperature &&
+    history.some((sample) => sample.temperature_celsius !== null)
+  ) {
+    charts.push({
+      title: t("history.temperatureSeries", language),
+      valueFormatter: formatTemperature,
+      series: [
+        {
+          name: t("metrics.temperatureCelsius", language),
+          color: "#dc2626",
+          values: history.map((sample) => sample.temperature_celsius),
+        },
+      ],
+    });
+  }
+
+  if (settings.metrics.power && history.some((sample) => sample.power_watts !== null)) {
+    charts.push({
+      title: t("history.powerSeries", language),
+      valueFormatter: formatPower,
+      series: [
+        {
+          name: t("metrics.powerWatts", language),
+          color: "#ea580c",
+          values: history.map((sample) => sample.power_watts),
         },
       ],
     });
@@ -865,7 +1140,9 @@ function metricToggleItems(language: SupportedLanguage): Array<{
     { key: "memory", label: t("metrics.memory", language) },
     { key: "disk", label: t("metrics.disk", language) },
     { key: "network", label: t("metrics.network", language) },
-    { key: "temperature", label: t("metrics.temperature", language), unsupported: true },
+    { key: "gpu", label: t("metrics.gpu", language) },
+    { key: "temperature", label: t("metrics.temperature", language) },
+    { key: "power", label: t("metrics.power", language) },
     { key: "battery", label: t("metrics.battery", language), unsupported: true },
   ];
 }

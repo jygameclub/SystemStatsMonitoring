@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "./settings";
-import { DEFAULT_SETTINGS } from "./settings";
+import { DEFAULT_SETTINGS, normalizeSettings } from "./settings";
 import type { DeviceInfo, HistoryQuery, LocalDataStats, MetricSample } from "../types";
 
 const DEMO_DEVICE: DeviceInfo = {
@@ -62,7 +62,7 @@ async function demoInvoke<T>(
       const sample = args?.sample as MetricSample | undefined;
       if (sample) {
         historyStore.push(sample);
-        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
         while (historyStore.length > 0 && historyStore[0].ts < cutoff) {
           historyStore.shift();
         }
@@ -92,7 +92,7 @@ function readDemoSettings(): AppSettings {
   }
 
   try {
-    return JSON.parse(raw) as AppSettings;
+    return normalizeSettings(JSON.parse(raw) as AppSettings);
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -108,6 +108,8 @@ function createDemoSample(): MetricSample {
   const diskUsed = diskTotal * 0.62;
   const gpuMemoryTotal = 16 * 1024 * 1024 * 1024;
   const gpuUsage = 42 + Math.sin(phase / 1.7) * 16 + Math.random() * 4;
+  const temperature = 58 + Math.sin(phase / 2.2) * 8 + Math.random() * 2;
+  const power = 22 + Math.sin(phase / 1.9) * 7 + Math.random() * 2;
 
   return {
     id: null,
@@ -123,6 +125,52 @@ function createDemoSample(): MetricSample {
     gpu_usage: clamp(gpuUsage, 0, 100),
     gpu_memory_total: gpuMemoryTotal,
     gpu_name: "Demo GPU",
+    temperature_celsius: clamp(temperature, 20, 110),
+    power_watts: Math.max(0, power),
+    sensor_readings: [
+      {
+        id: "cpu-performance-core-1",
+        label: "CPU performance core 1",
+        category: "temperature",
+        value: clamp(temperature + 2.4, 20, 110),
+        unit: "celsius",
+      },
+      {
+        id: "gpu-1",
+        label: "GPU 1",
+        category: "temperature",
+        value: clamp(temperature - 7.2, 20, 110),
+        unit: "celsius",
+      },
+      {
+        id: "nand",
+        label: "NAND",
+        category: "temperature",
+        value: clamp(temperature - 18.5, 20, 110),
+        unit: "celsius",
+      },
+      {
+        id: "system-voltage-in",
+        label: "DC In",
+        category: "voltage",
+        value: 12.06,
+        unit: "volt",
+      },
+      {
+        id: "system-current-in",
+        label: "DC In",
+        category: "current",
+        value: 3.11,
+        unit: "ampere",
+      },
+      {
+        id: "system-power-in",
+        label: "System Total",
+        category: "power",
+        value: Math.max(0, power),
+        unit: "watt",
+      },
+    ],
   };
 }
 

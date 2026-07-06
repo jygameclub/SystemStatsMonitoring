@@ -17,6 +17,31 @@ const sample: MetricSample = {
   gpu_usage: 48,
   gpu_memory_total: 16_000,
   gpu_name: "Apple M4 Pro",
+  temperature_celsius: 63.5,
+  power_watts: 18.2,
+  sensor_readings: [
+    {
+      id: "cpu-core-1",
+      label: "CPU performance core 1",
+      category: "temperature",
+      value: 63.5,
+      unit: "celsius",
+    },
+    {
+      id: "system-power",
+      label: "System Total",
+      category: "power",
+      value: 18.2,
+      unit: "watt",
+    },
+    {
+      id: "dc-in-voltage",
+      label: "DC In",
+      category: "voltage",
+      value: 12.06,
+      unit: "volt",
+    },
+  ],
 };
 
 describe("metrics utilities", () => {
@@ -33,6 +58,8 @@ describe("metrics utilities", () => {
           cpu: false,
           network: false,
           gpu: false,
+          temperature: false,
+          power: false,
         },
       }),
     ).toEqual({
@@ -43,6 +70,9 @@ describe("metrics utilities", () => {
       gpu_usage: null,
       gpu_memory_total: null,
       gpu_name: null,
+      temperature_celsius: null,
+      power_watts: null,
+      sensor_readings: [],
     });
   });
 });

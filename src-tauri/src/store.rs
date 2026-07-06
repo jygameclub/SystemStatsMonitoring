@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::models::{LocalDataStats, MetricSample};
-use crate::settings::{AppSettings, MetricSettings};
+use crate::models::{DeviceInfo, LocalDataStats, MetricSample};
+use crate::settings::{AppSettings, MetricSettings, S3SyncSettings};
 
 pub struct Store {
     conn: Connection,
@@ -57,7 +58,13 @@ impl Store {
               disk_used INTEGER,
               disk_total INTEGER,
               network_rx REAL,
-              network_tx REAL
+              network_tx REAL,
+              gpu_usage REAL,
+              gpu_memory_total INTEGER,
+              gpu_name TEXT,
+              temperature_celsius REAL,
+              power_watts REAL,
+              sensors_json TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_metric_samples_device_ts
@@ -71,6 +78,7 @@ impl Store {
         )?;
 
         self.migrate_metric_samples_nullable()?;
+        self.add_missing_metric_sample_columns()?;
 
         Ok(())
     }
@@ -87,8 +95,14 @@ impl Store {
               disk_used,
               disk_total,
               network_rx,
-              network_tx
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+              network_tx,
+              gpu_usage,
+              gpu_memory_total,
+              gpu_name,
+              temperature_celsius,
+              power_watts,
+              sensors_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             "#,
             params![
                 sample.device_id,
@@ -99,11 +113,37 @@ impl Store {
                 sample.disk_used.map(|value| value as i64),
                 sample.disk_total.map(|value| value as i64),
                 sample.network_rx,
-                sample.network_tx
+                sample.network_tx,
+                sample.gpu_usage,
+                sample.gpu_memory_total.map(|value| value as i64),
+                sample.gpu_name,
+                sample.temperature_celsius,
+                sample.power_watts,
+                serde_json::to_string(&sample.sensor_readings)
+                    .context("serialize sensor readings")?
             ],
         )?;
 
         Ok(())
+    }
+
+    pub fn upsert_metric_sample(&self, sample: &MetricSample) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM metric_samples WHERE device_id = ?1 AND ts = ?2",
+                params![sample.device_id, sample.ts],
+            )
+            .context("delete existing metric sample before upsert")?;
+
+        self.save_metric_sample(sample)
+    }
+
+    pub fn import_metric_samples(&self, samples: &[MetricSample]) -> Result<usize> {
+        for sample in samples {
+            self.upsert_metric_sample(sample)?;
+        }
+
+        Ok(samples.len())
     }
 
     pub fn metric_history(
@@ -124,7 +164,13 @@ impl Store {
               disk_used,
               disk_total,
               network_rx,
-              network_tx
+              network_tx,
+              gpu_usage,
+              gpu_memory_total,
+              gpu_name,
+              temperature_celsius,
+              power_watts,
+              sensors_json
             FROM metric_samples
             WHERE device_id = ?1
               AND ts >= ?2
@@ -145,11 +191,84 @@ impl Store {
                 disk_total: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
                 network_rx: row.get(8)?,
                 network_tx: row.get(9)?,
+                gpu_usage: row.get(10)?,
+                gpu_memory_total: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+                gpu_name: row.get(12)?,
+                temperature_celsius: row.get(13)?,
+                power_watts: row.get(14)?,
+                sensor_readings: row
+                    .get::<_, Option<String>>(15)?
+                    .and_then(|raw| serde_json::from_str(&raw).ok())
+                    .unwrap_or_default(),
             })
         })?;
 
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .context("collect metric history rows")
+    }
+
+    pub fn device_metric_history(
+        &self,
+        device_id: &str,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<MetricSample>> {
+        self.metric_history(device_id, start_ts, end_ts)
+    }
+
+    pub fn upsert_device(&self, device: &DeviceInfo, ts: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO devices (
+              id,
+              name,
+              os,
+              arch,
+              agent_version,
+              created_at,
+              last_seen_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              os = excluded.os,
+              arch = excluded.arch,
+              agent_version = excluded.agent_version,
+              last_seen_at = excluded.last_seen_at
+            "#,
+            params![
+                device.id,
+                device.name,
+                device.os,
+                device.arch,
+                device.agent_version,
+                ts
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn devices(&self) -> Result<Vec<DeviceInfo>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, name, os, arch, agent_version
+            FROM devices
+            ORDER BY last_seen_at DESC, name ASC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(DeviceInfo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                os: row.get(2)?,
+                arch: row.get(3)?,
+                agent_version: row.get(4)?,
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("collect device rows")
     }
 
     pub fn prune_metric_samples_before(&self, cutoff_ts: i64) -> Result<usize> {
@@ -209,6 +328,9 @@ impl Store {
         let language = self
             .get_setting_string("language")?
             .unwrap_or(AppSettings::default().language);
+        let machine_name = self
+            .get_setting_string("machine_name")?
+            .unwrap_or(AppSettings::default().machine_name);
         let default_metrics = MetricSettings::default();
         let metrics = MetricSettings {
             cpu: self
@@ -223,19 +345,57 @@ impl Store {
             network: self
                 .get_setting_bool("metric_network")?
                 .unwrap_or(default_metrics.network),
+            gpu: self
+                .get_setting_bool("metric_gpu")?
+                .unwrap_or(default_metrics.gpu),
             temperature: self
                 .get_setting_bool("metric_temperature")?
                 .unwrap_or(default_metrics.temperature),
+            power: self
+                .get_setting_bool("metric_power")?
+                .unwrap_or(default_metrics.power),
             battery: self
                 .get_setting_bool("metric_battery")?
                 .unwrap_or(default_metrics.battery),
+        };
+        let default_s3 = S3SyncSettings::default();
+        let s3_sync = S3SyncSettings {
+            enabled: self
+                .get_setting_bool("s3_sync_enabled")?
+                .unwrap_or(default_s3.enabled),
+            endpoint_url: self
+                .get_setting_string("s3_endpoint_url")?
+                .unwrap_or(default_s3.endpoint_url),
+            region: self
+                .get_setting_string("s3_region")?
+                .unwrap_or(default_s3.region),
+            bucket: self
+                .get_setting_string("s3_bucket")?
+                .unwrap_or(default_s3.bucket),
+            access_key_id: self
+                .get_setting_string("s3_access_key_id")?
+                .unwrap_or(default_s3.access_key_id),
+            secret_access_key: self
+                .get_setting_string("s3_secret_access_key")?
+                .unwrap_or(default_s3.secret_access_key),
+            prefix: self
+                .get_setting_string("s3_prefix")?
+                .unwrap_or(default_s3.prefix),
+            sync_interval_min: self
+                .get_setting_u64("s3_sync_interval_min")?
+                .unwrap_or(default_s3.sync_interval_min),
+            path_style: self
+                .get_setting_bool("s3_path_style")?
+                .unwrap_or(default_s3.path_style),
         };
 
         let settings = AppSettings {
             sample_interval_sec,
             local_save_interval_sec,
+            machine_name,
             language,
             metrics,
+            s3_sync,
         };
         settings.validate()?;
 
@@ -252,16 +412,37 @@ impl Store {
             "local_save_interval_sec",
             &settings.local_save_interval_sec.to_string(),
         )?;
+        self.set_setting("machine_name", settings.machine_name.trim())?;
         self.set_setting("language", &settings.language)?;
         self.set_setting("metric_cpu", bool_to_setting(settings.metrics.cpu))?;
         self.set_setting("metric_memory", bool_to_setting(settings.metrics.memory))?;
         self.set_setting("metric_disk", bool_to_setting(settings.metrics.disk))?;
         self.set_setting("metric_network", bool_to_setting(settings.metrics.network))?;
+        self.set_setting("metric_gpu", bool_to_setting(settings.metrics.gpu))?;
         self.set_setting(
             "metric_temperature",
             bool_to_setting(settings.metrics.temperature),
         )?;
+        self.set_setting("metric_power", bool_to_setting(settings.metrics.power))?;
         self.set_setting("metric_battery", bool_to_setting(settings.metrics.battery))?;
+        self.set_setting("s3_sync_enabled", bool_to_setting(settings.s3_sync.enabled))?;
+        self.set_setting("s3_endpoint_url", settings.s3_sync.endpoint_url.trim())?;
+        self.set_setting("s3_region", settings.s3_sync.region.trim())?;
+        self.set_setting("s3_bucket", settings.s3_sync.bucket.trim())?;
+        self.set_setting(
+            "s3_access_key_id",
+            settings.s3_sync.access_key_id.trim(),
+        )?;
+        self.set_setting(
+            "s3_secret_access_key",
+            settings.s3_sync.secret_access_key.trim(),
+        )?;
+        self.set_setting("s3_prefix", settings.s3_sync.prefix.trim())?;
+        self.set_setting(
+            "s3_sync_interval_min",
+            &settings.s3_sync.sync_interval_min.to_string(),
+        )?;
+        self.set_setting("s3_path_style", bool_to_setting(settings.s3_sync.path_style))?;
 
         Ok(settings.clone())
     }
@@ -344,7 +525,13 @@ impl Store {
               disk_used INTEGER,
               disk_total INTEGER,
               network_rx REAL,
-              network_tx REAL
+              network_tx REAL,
+              gpu_usage REAL,
+              gpu_memory_total INTEGER,
+              gpu_name TEXT,
+              temperature_celsius REAL,
+              power_watts REAL,
+              sensors_json TEXT
             );
 
             INSERT INTO metric_samples (
@@ -401,6 +588,10 @@ impl Store {
                     | "disk_total"
                     | "network_rx"
                     | "network_tx"
+                    | "gpu_usage"
+                    | "gpu_memory_total"
+                    | "temperature_celsius"
+                    | "power_watts"
             ) && not_null != 0
             {
                 return Ok(true);
@@ -408,6 +599,35 @@ impl Store {
         }
 
         Ok(false)
+    }
+    fn add_missing_metric_sample_columns(&self) -> Result<()> {
+        let columns = self.metric_sample_column_names()?;
+
+        for (name, sql_type) in [
+            ("gpu_usage", "REAL"),
+            ("gpu_memory_total", "INTEGER"),
+            ("gpu_name", "TEXT"),
+            ("temperature_celsius", "REAL"),
+            ("power_watts", "REAL"),
+            ("sensors_json", "TEXT"),
+        ] {
+            if !columns.contains(name) {
+                self.conn.execute(
+                    &format!("ALTER TABLE metric_samples ADD COLUMN {name} {sql_type}"),
+                    [],
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn metric_sample_column_names(&self) -> Result<HashSet<String>> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(metric_samples)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+
+        rows.collect::<rusqlite::Result<HashSet<_>>>()
+            .context("collect metric sample columns")
     }
 }
 

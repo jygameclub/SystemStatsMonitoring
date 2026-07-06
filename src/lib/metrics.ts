@@ -17,5 +17,25 @@ export function filterSampleBySettings(
     gpu_usage: settings.metrics.gpu ? sample.gpu_usage : null,
     gpu_memory_total: settings.metrics.gpu ? sample.gpu_memory_total : null,
     gpu_name: settings.metrics.gpu ? sample.gpu_name : null,
+    temperature_celsius: settings.metrics.temperature
+      ? sample.temperature_celsius
+      : null,
+    power_watts: settings.metrics.power ? sample.power_watts : null,
+    sensor_readings: (sample.sensor_readings ?? []).filter((reading) => {
+      if (reading.category === "temperature") {
+        return settings.metrics.temperature;
+      }
+
+      if (
+        reading.category === "power" ||
+        reading.category === "current" ||
+        reading.category === "voltage" ||
+        reading.category === "energy"
+      ) {
+        return settings.metrics.power;
+      }
+
+      return true;
+    }),
   };
 }

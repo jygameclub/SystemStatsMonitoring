@@ -1,5 +1,6 @@
 pub mod metrics;
 pub mod models;
+pub mod s3_sync;
 pub mod settings;
 pub mod store;
 
@@ -13,6 +14,8 @@ use store::Store;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
+
+const HISTORY_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
 pub struct AppState {
     store: Mutex<Store>,
@@ -50,12 +53,16 @@ fn save_metric_sample(state: State<'_, AppState>, sample: MetricSample) -> Comma
         .save_metric_sample(&sample)
         .map_err(|error| format!("保存历史采样失败: {error}"))?;
 
-    let cutoff = sample.ts - 24 * 60 * 60 * 1000;
+    let cutoff = history_retention_cutoff(sample.ts);
     store
         .prune_metric_samples_before(cutoff)
         .map_err(|error| format!("清理历史采样失败: {error}"))?;
 
     Ok(())
+}
+
+fn history_retention_cutoff(ts: i64) -> i64 {
+    ts - HISTORY_RETENTION_MS
 }
 
 #[tauri::command]
@@ -212,8 +219,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::MetricSample;
+    use crate::models::{MetricSample, SensorCategory, SensorReading, SensorUnit};
     use crate::settings::AppSettings;
+    use crate::s3_sync::{manifest_key, normalize_prefix, samples_key};
     use crate::store::Store;
 
     fn sample(ts: i64, cpu_usage: Option<f64>) -> MetricSample {
@@ -231,6 +239,24 @@ mod tests {
             gpu_usage: Some(48.0),
             gpu_memory_total: Some(16_000),
             gpu_name: Some("Apple M4 Pro".to_string()),
+            temperature_celsius: Some(63.5),
+            power_watts: Some(18.2),
+            sensor_readings: vec![
+                SensorReading {
+                    id: "cpu-core-1".to_string(),
+                    label: "CPU performance core 1".to_string(),
+                    category: SensorCategory::Temperature,
+                    value: 63.5,
+                    unit: SensorUnit::Celsius,
+                },
+                SensorReading {
+                    id: "system-power".to_string(),
+                    label: "System Total".to_string(),
+                    category: SensorCategory::Power,
+                    value: 18.2,
+                    unit: SensorUnit::Watt,
+                },
+            ],
         }
     }
 
@@ -239,8 +265,10 @@ mod tests {
         assert!(AppSettings {
             sample_interval_sec: 1,
             local_save_interval_sec: 5,
+            machine_name: "Studio Mac".to_string(),
             language: "zh-CN".to_string(),
             metrics: Default::default(),
+            s3_sync: Default::default(),
         }
         .validate()
         .is_ok());
@@ -248,8 +276,10 @@ mod tests {
         assert!(AppSettings {
             sample_interval_sec: 0,
             local_save_interval_sec: 5,
+            machine_name: "Studio Mac".to_string(),
             language: "zh-CN".to_string(),
             metrics: Default::default(),
+            s3_sync: Default::default(),
         }
         .validate()
         .is_err());
@@ -257,8 +287,10 @@ mod tests {
         assert!(AppSettings {
             sample_interval_sec: 10,
             local_save_interval_sec: 5,
+            machine_name: "Studio Mac".to_string(),
             language: "zh-CN".to_string(),
             metrics: Default::default(),
+            s3_sync: Default::default(),
         }
         .validate()
         .is_err());
@@ -269,13 +301,42 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(settings.language, "zh-CN");
+        assert_eq!(settings.machine_name, "");
         assert!(settings.metrics.cpu);
         assert!(settings.metrics.memory);
         assert!(settings.metrics.disk);
         assert!(settings.metrics.network);
         assert!(settings.metrics.gpu);
         assert!(settings.metrics.temperature);
+        assert!(settings.metrics.power);
         assert!(settings.metrics.battery);
+        assert!(!settings.s3_sync.enabled);
+        assert_eq!(settings.s3_sync.region, "us-east-1");
+        assert_eq!(settings.s3_sync.prefix, "system-stats-monitoring");
+        assert_eq!(settings.s3_sync.sync_interval_min, 10);
+    }
+
+    #[test]
+    fn rejects_incomplete_enabled_s3_sync_settings() {
+        let mut settings = AppSettings::default();
+        settings.s3_sync.enabled = true;
+
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn builds_stable_s3_object_keys() {
+        let prefix = normalize_prefix(" /team-a/system-monitor/ ").expect("normalize prefix");
+
+        assert_eq!(prefix, "team-a/system-monitor");
+        assert_eq!(
+            manifest_key(&prefix, "studio-mac"),
+            "team-a/system-monitor/devices/studio-mac/manifest.json"
+        );
+        assert_eq!(
+            samples_key(&prefix, "studio-mac", "2026-07-06"),
+            "team-a/system-monitor/devices/studio-mac/samples/2026-07-06.json"
+        );
     }
 
     #[test]
@@ -317,6 +378,13 @@ mod tests {
         assert_eq!(history[0].gpu_usage, Some(48.0));
         assert_eq!(history[0].gpu_memory_total, Some(16_000));
         assert_eq!(history[0].gpu_name.as_deref(), Some("Apple M4 Pro"));
+        assert_eq!(history[0].temperature_celsius, Some(63.5));
+        assert_eq!(history[0].power_watts, Some(18.2));
+        assert_eq!(history[0].sensor_readings.len(), 2);
+        assert_eq!(
+            history[0].sensor_readings[0].label,
+            "CPU performance core 1"
+        );
     }
 
     #[test]
@@ -361,5 +429,15 @@ mod tests {
 
         assert_eq!(deleted, 1);
         assert_eq!(after.sample_count, 0);
+    }
+
+    #[test]
+    fn keeps_thirty_days_for_month_history() {
+        let now = 1_783_317_600_000;
+
+        assert_eq!(
+            super::history_retention_cutoff(now),
+            now - 30 * 24 * 60 * 60 * 1000
+        );
     }
 }

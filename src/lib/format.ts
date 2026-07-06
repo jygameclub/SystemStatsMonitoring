@@ -23,6 +23,22 @@ export function formatNetworkRate(bytesPerSecond: number): string {
   return `${formatBytes(bytesPerSecond)}/s`;
 }
 
+export function formatTemperature(celsius: number): string {
+  if (!Number.isFinite(celsius)) {
+    return "0.0°C";
+  }
+
+  return `${celsius.toFixed(1)}°C`;
+}
+
+export function formatPower(watts: number): string {
+  if (!Number.isFinite(watts)) {
+    return "0.0 W";
+  }
+
+  return `${watts.toFixed(1)} W`;
+}
+
 export function formatPercent(value: number): string {
   if (!Number.isFinite(value)) {
     return "0.0%";
