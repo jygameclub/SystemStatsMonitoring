@@ -12,6 +12,7 @@ import type {
   DeviceInfo,
   LocalDataStats,
   MetricSample,
+  S3SyncReport,
   SensorCategory,
   SensorReading,
   SensorUnit,
@@ -60,6 +61,8 @@ const navKeys: Record<View, Parameters<typeof t>[0]> = {
 function App() {
   const [activeView, setActiveView] = useState<View>("overview");
   const [device, setDevice] = useState<DeviceInfo | null>(null);
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [selectedHistoryDeviceId, setSelectedHistoryDeviceId] = useState<string>("");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [latest, setLatest] = useState<MetricSample | null>(null);
   const [history, setHistory] = useState<MetricSample[]>([]);
@@ -77,18 +80,34 @@ function App() {
     settingsRef.current = settings;
   }, [settings]);
 
+  const refreshDeviceInfo = useCallback(async () => {
+    const deviceInfo = await invokeCommand<DeviceInfo>("get_device_info");
+    setDevice(deviceInfo);
+    setSelectedHistoryDeviceId((current) => current || deviceInfo.id);
+    return deviceInfo;
+  }, []);
+
+  const refreshDevices = useCallback(async () => {
+    const items = await invokeCommand<DeviceInfo[]>("list_devices");
+    setDevices(items);
+    return items;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
     async function bootstrap() {
       try {
-        const [deviceInfo, savedSettings] = await Promise.all([
-          invokeCommand<DeviceInfo>("get_device_info"),
+        const [deviceInfo, savedSettings, savedDevices] = await Promise.all([
+          refreshDeviceInfo(),
           invokeCommand<AppSettings>("get_settings"),
+          refreshDevices(),
         ]);
 
         if (!cancelled) {
           setDevice(deviceInfo);
+          setDevices(savedDevices);
+          setSelectedHistoryDeviceId(deviceInfo.id);
           setSettings(savedSettings);
         }
       } catch (unknownError) {
@@ -102,7 +121,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshDeviceInfo, refreshDevices]);
 
   const refreshLatest = useCallback(async () => {
     try {
@@ -140,6 +159,28 @@ function App() {
     return () => window.clearInterval(timer);
   }, [settings.local_save_interval_sec]);
 
+  useEffect(() => {
+    if (!settings.s3_sync.enabled) {
+      return;
+    }
+
+    const timer = window.setInterval(
+      () =>
+        void invokeCommand<S3SyncReport>("sync_s3_now")
+          .then(() => {
+            void refreshDevices();
+          })
+          .catch((unknownError) => setError(errorMessage(unknownError))),
+      settings.s3_sync.sync_interval_min * 60 * 1000,
+    );
+
+    return () => window.clearInterval(timer);
+  }, [
+    refreshDevices,
+    settings.s3_sync.enabled,
+    settings.s3_sync.sync_interval_min,
+  ]);
+
   const refreshHistory = useCallback(async () => {
     const now = Date.now();
     const startTs = historyRangeToStartTs(historyRange, now);
@@ -147,7 +188,7 @@ function App() {
     try {
       const samples = await invokeCommand<MetricSample[]>("get_metric_history", {
         query: {
-          device_id: device?.id,
+          device_id: selectedHistoryDeviceId || device?.id,
           start_ts: startTs,
           end_ts: now,
         },
@@ -157,7 +198,7 @@ function App() {
     } catch (unknownError) {
       setError(errorMessage(unknownError));
     }
-  }, [device?.id, historyRange]);
+  }, [device?.id, historyRange, selectedHistoryDeviceId]);
 
   const refreshLocalData = useCallback(async () => {
     try {
@@ -245,9 +286,12 @@ function App() {
           <History
             history={history}
             range={historyRange}
+            devices={devices}
+            selectedDeviceId={selectedHistoryDeviceId || device?.id || ""}
             settings={settings}
             language={language}
             onRangeChange={setHistoryRange}
+            onDeviceChange={setSelectedHistoryDeviceId}
             onRefresh={() => void refreshHistory()}
           />
         ) : null}
@@ -256,9 +300,17 @@ function App() {
             settings={settings}
             localData={localData}
             language={language}
-            onSaved={(nextSettings) => setSettings(nextSettings)}
+            onSaved={(nextSettings) => {
+              setSettings(nextSettings);
+              void refreshDeviceInfo();
+              void refreshDevices();
+            }}
             onError={setError}
             onLocalDataChanged={() => void refreshLocalData()}
+            onSyncFinished={() => {
+              void refreshDevices();
+              void refreshHistory();
+            }}
           />
         ) : null}
       </section>
@@ -653,16 +705,22 @@ function formatSensorValue(value: number, unit: SensorUnit): string {
 function History({
   history,
   range,
+  devices,
+  selectedDeviceId,
   settings,
   language,
   onRangeChange,
+  onDeviceChange,
   onRefresh,
 }: {
   history: MetricSample[];
   range: HistoryRange;
+  devices: DeviceInfo[];
+  selectedDeviceId: string;
   settings: AppSettings;
   language: SupportedLanguage;
   onRangeChange: (range: HistoryRange) => void;
+  onDeviceChange: (deviceId: string) => void;
   onRefresh: () => void;
 }) {
   const charts = buildHistoryCharts(history, settings, language);
@@ -670,6 +728,19 @@ function History({
   return (
     <div className="page-stack">
       <div className="toolbar">
+        <label className="toolbar-select">
+          <span>{t("history.device", language)}</span>
+          <select
+            value={selectedDeviceId}
+            onChange={(event) => onDeviceChange(event.target.value)}
+          >
+            {devices.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="segmented">
           {historyRangeItems(language).map((item) => (
             <button
@@ -948,6 +1019,7 @@ function Settings({
   onSaved,
   onError,
   onLocalDataChanged,
+  onSyncFinished,
 }: {
   settings: AppSettings;
   localData: LocalDataStats | null;
@@ -955,31 +1027,43 @@ function Settings({
   onSaved: (settings: AppSettings) => void;
   onError: (message: string | null) => void;
   onLocalDataChanged: () => void;
+  onSyncFinished: () => void;
 }) {
   const [form, setForm] = useState({
     sample_interval_sec: String(settings.sample_interval_sec),
     local_save_interval_sec: String(settings.local_save_interval_sec),
+    machine_name: settings.machine_name,
     language: settings.language,
     metrics: settings.metrics,
+    s3_sync: {
+      ...settings.s3_sync,
+      sync_interval_min: String(settings.s3_sync.sync_interval_min),
+    },
   });
   const [message, setMessage] = useState<string | null>(null);
+  const [s3Busy, setS3Busy] = useState(false);
 
   useEffect(() => {
     setForm({
       sample_interval_sec: String(settings.sample_interval_sec),
       local_save_interval_sec: String(settings.local_save_interval_sec),
+      machine_name: settings.machine_name,
       language: settings.language,
       metrics: settings.metrics,
+      s3_sync: {
+        ...settings.s3_sync,
+        sync_interval_min: String(settings.s3_sync.sync_interval_min),
+      },
     });
   }, [settings]);
 
-  async function saveSettings() {
+  async function saveSettings(): Promise<AppSettings | null> {
     const normalized = normalizeSettings(form);
     const validation = validateSettings(normalized);
 
     if (!validation.valid) {
       setMessage(validation.message);
-      return;
+      return null;
     }
 
     try {
@@ -989,10 +1073,53 @@ function Settings({
       onSaved(saved);
       onError(null);
       setMessage(t("settings.saved", saved.language));
+      return saved;
     } catch (unknownError) {
       const nextMessage = errorMessage(unknownError);
       onError(nextMessage);
       setMessage(nextMessage);
+      return null;
+    }
+  }
+
+  async function testS3Connection() {
+    const saved = await saveSettings();
+    if (!saved) {
+      return;
+    }
+
+    setS3Busy(true);
+    try {
+      await invokeCommand<void>("test_s3_connection");
+      onError(null);
+      setMessage(t("settings.s3.testOk", saved.language));
+    } catch (unknownError) {
+      const nextMessage = errorMessage(unknownError);
+      onError(nextMessage);
+      setMessage(nextMessage);
+    } finally {
+      setS3Busy(false);
+    }
+  }
+
+  async function syncS3Now() {
+    const saved = await saveSettings();
+    if (!saved) {
+      return;
+    }
+
+    setS3Busy(true);
+    try {
+      const report = await invokeCommand<S3SyncReport>("sync_s3_now");
+      onError(null);
+      onSyncFinished();
+      setMessage(formatS3SyncMessage(report, saved.language));
+    } catch (unknownError) {
+      const nextMessage = errorMessage(unknownError);
+      onError(nextMessage);
+      setMessage(nextMessage);
+    } finally {
+      setS3Busy(false);
     }
   }
 
@@ -1022,11 +1149,38 @@ function Settings({
     }));
   }
 
+  function updateS3Form(
+    key: keyof typeof form.s3_sync,
+    value: string | boolean,
+  ) {
+    setForm((current) => ({
+      ...current,
+      s3_sync: {
+        ...current.s3_sync,
+        [key]: value,
+      },
+    }));
+  }
+
   return (
     <div className="settings-stack">
       <section className="settings-panel">
         <h2>{t("settings.sampling", language)}</h2>
         <div className="form-grid">
+          <label>
+            <span>{t("settings.machineName", language)}</span>
+            <input
+              maxLength={64}
+              type="text"
+              value={form.machine_name}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  machine_name: event.target.value,
+                }))
+              }
+            />
+          </label>
           <label>
             <span>{t("settings.sampleInterval", language)}</span>
             <input
@@ -1072,6 +1226,134 @@ function Settings({
               <option value="en">English</option>
             </select>
           </label>
+        </div>
+      </section>
+
+      <section className="settings-panel">
+        <h2>{t("settings.s3.title", language)}</h2>
+        <div className="toggle-grid compact">
+          <label className="toggle-row">
+            <span>
+              <strong>{t("settings.s3.enabled", language)}</strong>
+            </span>
+            <input
+              checked={form.s3_sync.enabled}
+              type="checkbox"
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  s3_sync: {
+                    ...current.s3_sync,
+                    enabled: event.target.checked,
+                  },
+                }))
+              }
+            />
+          </label>
+          <label className="toggle-row">
+            <span>
+              <strong>{t("settings.s3.pathStyle", language)}</strong>
+            </span>
+            <input
+              checked={form.s3_sync.path_style}
+              type="checkbox"
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  s3_sync: {
+                    ...current.s3_sync,
+                    path_style: event.target.checked,
+                  },
+                }))
+              }
+            />
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            <span>{t("settings.s3.endpoint", language)}</span>
+            <input
+              type="url"
+              value={form.s3_sync.endpoint_url}
+              onChange={(event) =>
+                updateS3Form("endpoint_url", event.target.value)
+              }
+            />
+          </label>
+          <label>
+            <span>{t("settings.s3.region", language)}</span>
+            <input
+              type="text"
+              value={form.s3_sync.region}
+              onChange={(event) => updateS3Form("region", event.target.value)}
+            />
+          </label>
+          <label>
+            <span>{t("settings.s3.bucket", language)}</span>
+            <input
+              type="text"
+              value={form.s3_sync.bucket}
+              onChange={(event) => updateS3Form("bucket", event.target.value)}
+            />
+          </label>
+          <label>
+            <span>{t("settings.s3.prefix", language)}</span>
+            <input
+              type="text"
+              value={form.s3_sync.prefix}
+              onChange={(event) => updateS3Form("prefix", event.target.value)}
+            />
+          </label>
+          <label>
+            <span>{t("settings.s3.accessKey", language)}</span>
+            <input
+              type="text"
+              value={form.s3_sync.access_key_id}
+              onChange={(event) =>
+                updateS3Form("access_key_id", event.target.value)
+              }
+            />
+          </label>
+          <label>
+            <span>{t("settings.s3.secretKey", language)}</span>
+            <input
+              type="password"
+              value={form.s3_sync.secret_access_key}
+              onChange={(event) =>
+                updateS3Form("secret_access_key", event.target.value)
+              }
+            />
+          </label>
+          <label>
+            <span>{t("settings.s3.syncInterval", language)}</span>
+            <input
+              min={1}
+              max={1440}
+              type="number"
+              value={form.s3_sync.sync_interval_min}
+              onChange={(event) =>
+                updateS3Form("sync_interval_min", event.target.value)
+              }
+            />
+          </label>
+        </div>
+        <div className="button-row">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={s3Busy}
+            onClick={() => void testS3Connection()}
+          >
+            {t("settings.s3.test", language)}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={s3Busy}
+            onClick={() => void syncS3Now()}
+          >
+            {t("settings.s3.syncNow", language)}
+          </button>
         </div>
       </section>
 
@@ -1128,6 +1410,16 @@ function Settings({
       </section>
     </div>
   );
+}
+
+function formatS3SyncMessage(
+  report: S3SyncReport,
+  language: SupportedLanguage,
+): string {
+  return t("settings.s3.syncOk", language)
+    .replace("{uploadedDays}", String(report.uploaded_days))
+    .replace("{downloadedDevices}", String(report.downloaded_devices))
+    .replace("{importedSamples}", String(report.imported_samples));
 }
 
 function metricToggleItems(language: SupportedLanguage): Array<{

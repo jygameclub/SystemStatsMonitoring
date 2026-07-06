@@ -429,10 +429,7 @@ impl Store {
         self.set_setting("s3_endpoint_url", settings.s3_sync.endpoint_url.trim())?;
         self.set_setting("s3_region", settings.s3_sync.region.trim())?;
         self.set_setting("s3_bucket", settings.s3_sync.bucket.trim())?;
-        self.set_setting(
-            "s3_access_key_id",
-            settings.s3_sync.access_key_id.trim(),
-        )?;
+        self.set_setting("s3_access_key_id", settings.s3_sync.access_key_id.trim())?;
         self.set_setting(
             "s3_secret_access_key",
             settings.s3_sync.secret_access_key.trim(),
@@ -442,7 +439,10 @@ impl Store {
             "s3_sync_interval_min",
             &settings.s3_sync.sync_interval_min.to_string(),
         )?;
-        self.set_setting("s3_path_style", bool_to_setting(settings.s3_sync.path_style))?;
+        self.set_setting(
+            "s3_path_style",
+            bool_to_setting(settings.s3_sync.path_style),
+        )?;
 
         Ok(settings.clone())
     }

@@ -6,9 +6,10 @@ pub mod store;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use metrics::MetricCollector;
-use models::{DeviceInfo, HistoryQuery, LocalDataStats, MetricSample};
+use models::{DeviceInfo, HistoryQuery, LocalDataStats, MetricSample, S3SyncReport};
 use settings::AppSettings;
 use store::Store;
 use tauri::menu::{Menu, MenuItem};
@@ -20,14 +21,18 @@ const HISTORY_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 pub struct AppState {
     store: Mutex<Store>,
     collector: Mutex<MetricCollector>,
-    device: DeviceInfo,
+    device: Mutex<DeviceInfo>,
 }
 
 type CommandResult<T> = Result<T, String>;
 
 #[tauri::command]
 fn get_device_info(state: State<'_, AppState>) -> DeviceInfo {
-    state.device.clone()
+    state
+        .device
+        .lock()
+        .map(|device| device.clone())
+        .unwrap_or_else(|_| DeviceInfo::current())
 }
 
 #[tauri::command]
@@ -74,7 +79,15 @@ fn get_metric_history(
         .store
         .lock()
         .map_err(|_| "数据库锁定失败".to_string())?;
-    let device_id = query.device_id.unwrap_or_else(|| state.device.id.clone());
+    let device_id = match query.device_id {
+        Some(device_id) => device_id,
+        None => state
+            .device
+            .lock()
+            .map_err(|_| "设备信息锁定失败".to_string())?
+            .id
+            .clone(),
+    };
 
     store
         .metric_history(&device_id, query.start_ts, query.end_ts)
@@ -103,9 +116,109 @@ fn update_settings(
         .lock()
         .map_err(|_| "数据库锁定失败".to_string())?;
 
-    store
+    let saved = store
         .update_settings(&settings)
-        .map_err(|error| format!("保存设置失败: {error}"))
+        .map_err(|error| format!("保存设置失败: {error}"))?;
+
+    let next_device = DeviceInfo::current_with_machine_name(&saved.machine_name);
+    store
+        .upsert_device(&next_device, now_ms())
+        .map_err(|error| format!("保存设备信息失败: {error}"))?;
+
+    state
+        .collector
+        .lock()
+        .map_err(|_| "指标采集器锁定失败".to_string())?
+        .set_device_id(next_device.id.clone());
+    *state
+        .device
+        .lock()
+        .map_err(|_| "设备信息锁定失败".to_string())? = next_device;
+
+    Ok(saved)
+}
+
+#[tauri::command]
+fn list_devices(state: State<'_, AppState>) -> CommandResult<Vec<DeviceInfo>> {
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "数据库锁定失败".to_string())?;
+
+    store
+        .devices()
+        .map_err(|error| format!("读取设备列表失败: {error}"))
+}
+
+#[tauri::command]
+async fn test_s3_connection(state: State<'_, AppState>) -> CommandResult<()> {
+    let settings = {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| "数据库锁定失败".to_string())?;
+        store
+            .get_settings()
+            .map_err(|error| format!("读取设置失败: {error}"))?
+            .s3_sync
+    };
+
+    s3_sync::test_connection(&settings)
+        .await
+        .map_err(|error| format!("S3 连接测试失败: {error}"))
+}
+
+#[tauri::command]
+async fn sync_s3_now(state: State<'_, AppState>) -> CommandResult<S3SyncReport> {
+    let now = now_ms();
+    let cutoff = history_retention_cutoff(now);
+    let (settings, device, local_samples) = {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| "数据库锁定失败".to_string())?;
+        let settings = store
+            .get_settings()
+            .map_err(|error| format!("读取设置失败: {error}"))?
+            .s3_sync;
+        let device = state
+            .device
+            .lock()
+            .map_err(|_| "设备信息锁定失败".to_string())?
+            .clone();
+        let local_samples = store
+            .metric_history(&device.id, cutoff, now)
+            .map_err(|error| format!("读取本机历史采样失败: {error}"))?;
+        (settings, device, local_samples)
+    };
+
+    let (uploaded_days, downloaded) =
+        s3_sync::upload_and_download(&settings, &device, &local_samples, now)
+            .await
+            .map_err(|error| format!("S3 同步失败: {error}"))?;
+
+    let downloaded_devices = downloaded.len();
+    let mut imported_samples = 0;
+    {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| "数据库锁定失败".to_string())?;
+        for item in downloaded {
+            store
+                .upsert_device(&item.device, now)
+                .map_err(|error| format!("保存远端设备失败: {error}"))?;
+            imported_samples += store
+                .import_metric_samples(&item.samples)
+                .map_err(|error| format!("导入远端历史失败: {error}"))?;
+        }
+    }
+
+    Ok(S3SyncReport {
+        uploaded_days,
+        downloaded_devices,
+        imported_samples,
+    })
 }
 
 #[tauri::command]
@@ -180,6 +293,13 @@ fn app_database_path(app: &tauri::App) -> anyhow::Result<PathBuf> {
     Ok(app_data_dir.join("system-stats-monitoring.sqlite3"))
 }
 
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -191,13 +311,19 @@ pub fn run() {
                 .init()
                 .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
 
-            let device = DeviceInfo::current();
+            let settings = store
+                .get_settings()
+                .unwrap_or_else(|_| AppSettings::default());
+            let device = DeviceInfo::current_with_machine_name(&settings.machine_name);
+            store
+                .upsert_device(&device, now_ms())
+                .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
             let collector = MetricCollector::new(device.id.clone());
 
             app.manage(AppState {
                 store: Mutex::new(store),
                 collector: Mutex::new(collector),
-                device,
+                device: Mutex::new(device),
             });
 
             setup_tray(app)?;
@@ -210,6 +336,9 @@ pub fn run() {
             get_metric_history,
             get_settings,
             update_settings,
+            list_devices,
+            test_s3_connection,
+            sync_s3_now,
             get_local_data_stats,
             clear_local_metric_samples
         ])
@@ -220,8 +349,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use crate::models::{MetricSample, SensorCategory, SensorReading, SensorUnit};
-    use crate::settings::AppSettings;
     use crate::s3_sync::{manifest_key, normalize_prefix, samples_key};
+    use crate::settings::AppSettings;
     use crate::store::Store;
 
     fn sample(ts: i64, cpu_usage: Option<f64>) -> MetricSample {

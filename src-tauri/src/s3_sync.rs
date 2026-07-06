@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use object_store::aws::AmazonS3Builder;
@@ -200,10 +199,7 @@ async fn put_json<T: Serialize>(store: &impl ObjectStore, key: &str, value: &T) 
     Ok(())
 }
 
-async fn get_json<T: for<'de> Deserialize<'de>>(
-    store: &impl ObjectStore,
-    key: &str,
-) -> Result<T> {
+async fn get_json<T: for<'de> Deserialize<'de>>(store: &impl ObjectStore, key: &str) -> Result<T> {
     let bytes = store
         .get(&Path::from(key))
         .await
@@ -311,15 +307,15 @@ mod tests {
 
     #[test]
     fn derives_utc_day_from_timestamp() {
-        assert_eq!(day_from_timestamp(1_783_180_800_000).as_deref(), Some("2026-07-04"));
+        assert_eq!(
+            day_from_timestamp(1_783_180_800_000).as_deref(),
+            Some("2026-07-04")
+        );
     }
 
     #[test]
     fn groups_samples_by_utc_day() {
-        let grouped = group_samples_by_day(&[
-            sample(1_783_180_800_000),
-            sample(1_783_267_200_000),
-        ]);
+        let grouped = group_samples_by_day(&[sample(1_783_180_800_000), sample(1_783_267_200_000)]);
 
         assert_eq!(grouped.len(), 2);
         assert!(grouped.contains_key("2026-07-04"));

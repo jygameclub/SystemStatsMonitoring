@@ -63,4 +63,10 @@ export interface LocalDataStats {
   sample_count: number;
 }
 
+export interface S3SyncReport {
+  uploaded_days: number;
+  downloaded_devices: number;
+  imported_samples: number;
+}
+
 export type { AppSettings };

@@ -41,6 +41,7 @@ type TranslationKey =
   | "metrics.download"
   | "metrics.upload"
   | "history.refresh"
+  | "history.device"
   | "history.emptyTitle"
   | "history.emptyBody"
   | "history.cpuSeries"
@@ -54,10 +55,25 @@ type TranslationKey =
   | "history.temperatureSeries"
   | "history.powerSeries"
   | "settings.sampling"
+  | "settings.machineName"
   | "settings.sampleInterval"
   | "settings.saveInterval"
   | "settings.language"
   | "settings.metrics"
+  | "settings.s3.title"
+  | "settings.s3.enabled"
+  | "settings.s3.endpoint"
+  | "settings.s3.region"
+  | "settings.s3.bucket"
+  | "settings.s3.prefix"
+  | "settings.s3.accessKey"
+  | "settings.s3.secretKey"
+  | "settings.s3.syncInterval"
+  | "settings.s3.pathStyle"
+  | "settings.s3.test"
+  | "settings.s3.syncNow"
+  | "settings.s3.testOk"
+  | "settings.s3.syncOk"
   | "settings.unsupportedHint"
   | "settings.save"
   | "settings.saved"
@@ -108,6 +124,7 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "metrics.download": "下载",
     "metrics.upload": "上传",
     "history.refresh": "刷新",
+    "history.device": "设备",
     "history.emptyTitle": "暂无历史数据",
     "history.emptyBody": "保持应用运行，等待本地采样写入。",
     "history.cpuSeries": "CPU %",
@@ -121,10 +138,25 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "history.temperatureSeries": "温度",
     "history.powerSeries": "功率",
     "settings.sampling": "采样设置",
+    "settings.machineName": "本机名称",
     "settings.sampleInterval": "采样间隔（秒）",
     "settings.saveInterval": "本地保存间隔（秒）",
     "settings.language": "语言",
     "settings.metrics": "指标开关",
+    "settings.s3.title": "S3 同步",
+    "settings.s3.enabled": "启用 S3 同步",
+    "settings.s3.endpoint": "S3 地址",
+    "settings.s3.region": "Region",
+    "settings.s3.bucket": "Bucket",
+    "settings.s3.prefix": "目录",
+    "settings.s3.accessKey": "Access Key",
+    "settings.s3.secretKey": "Secret Key",
+    "settings.s3.syncInterval": "同步间隔（分钟）",
+    "settings.s3.pathStyle": "Path-style 地址",
+    "settings.s3.test": "测试连接",
+    "settings.s3.syncNow": "立即同步",
+    "settings.s3.testOk": "S3 连接成功",
+    "settings.s3.syncOk": "S3 同步完成：上传 {uploadedDays} 天，拉取 {downloadedDevices} 台设备，导入 {importedSamples} 条采样",
     "settings.unsupportedHint": "当前版本只保留开关，采集稍后支持。",
     "settings.save": "保存",
     "settings.saved": "设置已保存",
@@ -174,6 +206,7 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "metrics.download": "Download",
     "metrics.upload": "Upload",
     "history.refresh": "Refresh",
+    "history.device": "Device",
     "history.emptyTitle": "No history yet",
     "history.emptyBody": "Keep the app running until local samples are saved.",
     "history.cpuSeries": "CPU %",
@@ -187,10 +220,25 @@ const translations: Record<SupportedLanguage, Record<TranslationKey, string>> = 
     "history.temperatureSeries": "Temperature",
     "history.powerSeries": "Power",
     "settings.sampling": "Sampling",
+    "settings.machineName": "Machine name",
     "settings.sampleInterval": "Sample interval (seconds)",
     "settings.saveInterval": "Local save interval (seconds)",
     "settings.language": "Language",
     "settings.metrics": "Metric toggles",
+    "settings.s3.title": "S3 Sync",
+    "settings.s3.enabled": "Enable S3 sync",
+    "settings.s3.endpoint": "S3 endpoint",
+    "settings.s3.region": "Region",
+    "settings.s3.bucket": "Bucket",
+    "settings.s3.prefix": "Prefix",
+    "settings.s3.accessKey": "Access Key",
+    "settings.s3.secretKey": "Secret Key",
+    "settings.s3.syncInterval": "Sync interval (minutes)",
+    "settings.s3.pathStyle": "Path-style URL",
+    "settings.s3.test": "Test connection",
+    "settings.s3.syncNow": "Sync now",
+    "settings.s3.testOk": "S3 connection succeeded",
+    "settings.s3.syncOk": "S3 sync complete: uploaded {uploadedDays} days, downloaded {downloadedDevices} devices, imported {importedSamples} samples",
     "settings.unsupportedHint": "Toggle is saved now; collection will be added later.",
     "settings.save": "Save",
     "settings.saved": "Settings saved",

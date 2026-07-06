@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "./settings";
 import { DEFAULT_SETTINGS, normalizeSettings } from "./settings";
-import type { DeviceInfo, HistoryQuery, LocalDataStats, MetricSample } from "../types";
+import type {
+  DeviceInfo,
+  HistoryQuery,
+  LocalDataStats,
+  MetricSample,
+  S3SyncReport,
+} from "../types";
 
 const DEMO_DEVICE: DeviceInfo = {
   id: "browser-preview",
@@ -34,7 +40,9 @@ async function demoInvoke<T>(
 ): Promise<T> {
   switch (command) {
     case "get_device_info":
-      return DEMO_DEVICE as T;
+      return readDemoDevice() as T;
+    case "list_devices":
+      return [readDemoDevice()] as T;
     case "get_settings":
       return readDemoSettings() as T;
     case "update_settings": {
@@ -45,6 +53,16 @@ async function demoInvoke<T>(
     case "get_latest_metrics": {
       const sample = createDemoSample();
       return sample as T;
+    }
+    case "test_s3_connection": {
+      return undefined as T;
+    }
+    case "sync_s3_now": {
+      return {
+        uploaded_days: historyStore.length > 0 ? 1 : 0,
+        downloaded_devices: 0,
+        imported_samples: 0,
+      } satisfies S3SyncReport as T;
     }
     case "get_local_data_stats": {
       return {
@@ -98,6 +116,17 @@ function readDemoSettings(): AppSettings {
   }
 }
 
+function readDemoDevice(): DeviceInfo {
+  const settings = readDemoSettings();
+  const name = settings.machine_name.trim() || DEMO_DEVICE.name;
+
+  return {
+    ...DEMO_DEVICE,
+    id: sanitizeDeviceId(`${name}-${DEMO_DEVICE.os}-${DEMO_DEVICE.arch}`),
+    name,
+  };
+}
+
 function createDemoSample(): MetricSample {
   const now = Date.now();
   const phase = now / 10_000;
@@ -113,7 +142,7 @@ function createDemoSample(): MetricSample {
 
   return {
     id: null,
-    device_id: DEMO_DEVICE.id,
+    device_id: readDemoDevice().id,
     ts: now,
     cpu_usage: clamp(cpu, 0, 100),
     memory_used: Math.round(memoryUsed),
@@ -172,6 +201,15 @@ function createDemoSample(): MetricSample {
       },
     ],
   };
+}
+
+function sanitizeDeviceId(value: string): string {
+  const id = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return id || "browser-preview";
 }
 
 function clamp(value: number, min: number, max: number): number {
